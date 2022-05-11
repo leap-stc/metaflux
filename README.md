@@ -12,7 +12,7 @@ git clone https://github.com/juannat7/metaflux.git
 pip install -r requirements.txt
 ```
 
-3. Run sample training script using FLUXNET stations data, meta-learned on the tropics
+3. On terminal, you can run a sample training script using FLUXNET stations data, meta-learned on the tropics
 ```
 cd metaflux
 python train.py -i "./data/tropics", -t "GPP_NT_VUT_REF" -m "bilstm"
@@ -43,10 +43,10 @@ learner = metaflux.learner.Learner(config=model_config, input_size=hyper_args["i
 
 4. Setting up DataLoader for batching and randomizing inputs at each iteration:
 ```
-root_dir = <YOUR_DATA_DIRECTORY> # eg "./Data/tropics" which has the following folder structure ./Data/<class>/<mode>/<filenames>.csv
-fluxnet_train = metaflux.dataloader.Fluxmetanet(root=root_dir, mode="train", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column='LE_CORR', time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
+root_dir = <YOUR_DATA_DIRECTORY> # eg "metaflux/data/tropics" which has the following folder structure ./Data/<class>/<mode>/<filenames>.csv
+fluxnet_train = metaflux.dataloader.Fluxmetanet(root=root_dir, mode="train", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column='GPP_NT_VUT_REF', time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
 
-fluxnet_test = metaflux.dataloader.Fluxmetanet(root=root_dir, mode="test", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column='LE_CORR', time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
+fluxnet_test = metaflux.dataloader.Fluxmetanet(root=root_dir, mode="test", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column='GPP_NT_VUT_REF', time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
 ```
 
 5. Training metalearner given our base-learner and dataloader:
@@ -72,5 +72,5 @@ for x_spt, y_spt, x_qry, y_qry in db_test:
 - [x] Meta-learning routine
 - [x] Training, validation loop
 - [x] Sample data and baseline evaluation
-- [ ] Abstract hyperparameters and model configurations as modifiable txt
+- [x] Abstract hyperparameters and model configurations as modifiable YAML
 - [ ] Allow customizable baseline models

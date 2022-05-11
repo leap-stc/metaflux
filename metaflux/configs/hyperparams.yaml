@@ -1,0 +1,16 @@
+epoch: 25
+hidden_size: 64
+input_size: 3
+k_qry: 250
+k_spt: 250
+meta_lr: 1.0e-05
+n_way: 2
+num_lstm_layers: 2
+task_num: 1
+update_lr: 1.0e-05
+update_step: 250
+update_step_test: 5
+xcolumns:
+- P_F
+- lai
+- RH
