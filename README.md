@@ -7,7 +7,22 @@ Meta-learning framework for climate sciences.
 git clone https://github.com/juannat7/metaflux.git
 ```
 
-2. Import the package into your notebook or IDE: 
+2. Install dependencies
+```
+pip install -r requirements.txt
+```
+
+3. Run sample training script using FLUXNET stations data, meta-learned on the tropics
+```
+cd metaflux
+python train.py -i "./data/tropics", -t "GPP_NT_VUT_REF" -m "bilstm"
+```
+
+![Meta inference](https://github.com/juannat7/metaflux/blob/main/docs/gpp_infer.jpeg)
+
+## Customizable
+You can customize the package by changing the hyperparameters and base-learners
+1. Import the package into your notebook or IDE: 
 ```
 import metaflux
 import torch
@@ -15,16 +30,15 @@ from torch.utils.data import DataLoader
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ```
 
-3. Initialize the base-learner:
+2. Load hyperparametersthe base-learner:
 ```
-# load the hyperparameters specification and model base-learner model definition
 hyper_args = metaflux.configs.get_hyperparams()
+```
+
+3. Initialize base-learner
+```
 model_config = metaflux.configs.get_config(model="bilstm", args=hyper_args)
-
-# initialize the base-learner
 learner = metaflux.learner.Learner(config=model_config, input_size=hyper_args["input_size"], hidden_size=hyper_args["hidden_size"])
-
-print(learner) # This should give you the structure of the base-model
 ```
 
 4. Setting up DataLoader for batching and randomizing inputs at each iteration:
@@ -52,11 +66,11 @@ for x_spt, y_spt, x_qry, y_qry in db_test:
     loss = maml.finetuning(x_spt, y_spt, x_qry, y_qry)
 ```
 
-![Screenshot](docs/GPP_infer.jpeg)
-
 ## TO-DO:
 - [x] Initializing base-learner and model specification
 - [x] Data loader
 - [x] Meta-learning routine
 - [x] Training, validation loop
-- [ ] Sample data
+- [x] Sample data and baseline evaluation
+- [ ] Abstract hyperparameters and model configurations as modifiable txt
+- [ ] Allow customizable baseline models
