@@ -1,5 +1,9 @@
 # Metaflux
-Meta-learning framework for climate sciences.
+Meta-learning framework for climate sciences. Currently supports the following features:
+- Takes as input timeseries data (eg. FLUXNET eddy covariance stations)
+- Customizable MLP, LSTM, and BiLSTM models (update the `configs.py` file) TODO: customizable with YAML file
+- Customizable hyperparameters (create your own and place them under the `configs` directory)
+- Sample training script with sample data that can be adapted to your own use case
 
 ## Quickstart
 1. Clone this repository into your private workspace:
@@ -20,7 +24,7 @@ python train.py -i "./data/tropics", -t "GPP_NT_VUT_REF" -m "bilstm"
 
 ![Meta inference](https://github.com/juannat7/metaflux/blob/main/docs/gpp_infer.jpeg)
 
-## Customizable
+## Build-Your-Own Metalearning Pipeline
 You can customize the package by changing the hyperparameters and base-learners
 1. Import the package into your notebook or IDE: 
 ```

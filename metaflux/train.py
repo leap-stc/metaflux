@@ -21,7 +21,7 @@ parser.add_argument("-m", "--model", default="mlp", help = "Models to use, curre
 cli_args = parser.parse_args()
 
 
-hyper_args = get_hyperparams()
+hyper_args = get_hyperparams(config_path="configs/hyperparams.yaml")
 model_config = get_config(model=cli_args.model, args=hyper_args)
 
 runs = 1
