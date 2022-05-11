@@ -2,8 +2,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .configs import *
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Learner(nn.Module):
