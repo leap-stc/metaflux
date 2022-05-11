@@ -119,7 +119,7 @@ class Fluxmetanet(Dataset):
                     cls_df = pd.read_csv(cls_csv, index_col=None, header=0)
 
                     # Aggregate time (generally to smooth out noisy observations)
-                    cls_df = cls_df.set_index(pd.DatetimeIndex(cls_df["TIMESTAMP_START"])).resample(self.time_agg).mean()
+                    cls_df = cls_df.set_index(pd.DatetimeIndex(cls_df[self.timecolumn])).resample(self.time_agg).mean()
 
                     # Gap-filling and normalize data (except for the target variable)
                     cls_df = cls_df.fillna(method="ffill")[self.xcolumns + self.ycolumns] # forward fill
@@ -147,7 +147,8 @@ class Fluxmetanet(Dataset):
                         print(f"Error in processing sites: {cls_csv}")
                         continue
                 else:
-                    selected_timeseries_idx = np.arange(cls_len - self.k_shot - self.k_query, cls_len)
+                    #selected_timeseries_idx = np.arange(cls_len - self.k_shot - self.k_query, cls_len)
+                    selected_timeseries_idx = np.random.choice(cls_len, self.k_shot + self.k_query, False)
                         
                 # 2. select k_shot + k_query for each class
                 Dtrain_idx = np.array(selected_timeseries_idx[:self.k_shot])  # idx for Dtrain
@@ -214,3 +215,54 @@ class Fluxmetanet(Dataset):
         
     def __len__(self):
         return self.batchsz
+
+
+def generate_base_metadata(root, mode, batchsz, n_way, k_shot, k_query, x_columns, y_column, time_column="TIMESTAMP_START", time_agg="1H", seasonality=24):
+    columns = [time_column] + x_columns + [y_column]
+    
+    csv_files = glob.glob(os.path.join(root, mode) + "/*.csv")
+    
+    if mode == "train":
+        samplesz = k_shot
+        selected_cls = np.random.choice(len(csv_files), n_way, False)
+    else:
+        samplesz = k_query
+        selected_cls = np.random.choice(len(csv_files), max(2, len(csv_files) - 1), replace=False) # take n-1 or at least 2 labels randomly
+
+    data_li = torch.Tensor()
+
+    for cls in tqdm(selected_cls):
+        try:
+            cls_csv = csv_files[cls]
+            df = pd.read_csv(cls_csv, index_col=None, header=0)
+            df = df.set_index(pd.DatetimeIndex(df[time_column])).resample(time_agg).mean()
+            df = df.fillna(method="ffill")[columns[1:]]
+            df = df.fillna(method="bfill")[columns[1:]]
+            df = df.dropna()
+            df.loc[:, df.columns != y_column] = (df.loc[:, df.columns != y_column] - df.loc[:, df.columns != y_column].mean()) / df.loc[:, df.columns != y_column].std() # normalize
+            #df = (df - df.mean()) / df.std()
+            
+            # generate series
+            n = seasonality
+                
+            series_df = np.empty((len(df) - n, n, df.shape[1]))
+            for i in range(len(df) - n):
+                series_df[i] = df[i:i+n].values
+                
+            cls_len = series_df.shape[0]
+            
+            if mode == "train":
+                selected_timeseries_idx = np.random.choice(cls_len, samplesz * 2, False)
+                np.random.shuffle(selected_timeseries_idx)
+            else:
+                selected_timeseries_idx = np.arange(cls_len - samplesz * 2, cls_len)
+
+            data_df = torch.tensor(series_df[selected_timeseries_idx])
+            data_li = torch.cat((data_df,data_li))
+        
+        except:
+            print(f"Error processing: {cls}")
+    
+    data_x, data_y = data_li[:,:,0:-1], data_li[:,-1:,-1]
+    
+    return data_x, data_y

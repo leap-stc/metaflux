@@ -3,7 +3,10 @@ import numpy as np
 from torch import nn
 import warnings
 warnings.filterwarnings("ignore")
-from .learner import *
+try:
+    from learner import *
+except:
+    from .learner import *
 
 class Meta(nn.Module):
     """

@@ -158,3 +158,69 @@ class Learner(nn.Module):
         :return:
         """
         return self.vars
+
+
+class BaseMeta(nn.Module):
+    """
+    Defining the base learner (for use without meta-learning)
+    TODO: use config to define model structure as meta-learning approach above
+
+    Params:
+    -------
+    config: dict
+        A dictionary containing the specification of models
+    input_size: int
+        The expected input size to the model
+    hidden_size: int
+        The expected hidden size to the model
+    """
+
+    def __init__(self, input_size, hidden_size, arch, neg_slope=0.01):
+        super(BaseMeta, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.arch = arch
+        self.neg_slope = neg_slope
+        
+        if self.arch == "lstm":
+            self.lstm = torch.nn.LSTM(input_size = self.input_size, 
+                                        hidden_size = self.hidden_size,
+                                        bidirectional=False,
+                                        num_layers=2, 
+                                        batch_first=True)
+                                        
+            self.fc_out = torch.nn.Linear(self.hidden_size, 1) #for unidirectional
+            
+        elif self.arch == "bilstm":
+            self.lstm = torch.nn.LSTM(input_size = self.input_size, 
+                            hidden_size = self.hidden_size,
+                            bidirectional=True,
+                            num_layers=2, 
+                            batch_first=True)
+
+            self.fc_out = torch.nn.Linear(2*self.hidden_size, 1) #for bidirectional
+            
+        else:
+            self.fc_in = torch.nn.Linear(self.input_size, self.hidden_size)
+            self.fc_1 = torch.nn.Linear(self.hidden_size, self.hidden_size)
+            self.fc_out = torch.nn.Linear(self.hidden_size, 1)
+        
+    def forward(self, x):
+        if self.arch == "lstm":
+            x, (_,_) = self.lstm(x)
+            x = F.leaky_relu(x, negative_slope=self.neg_slope)
+            x = self.fc_out(x)
+
+        elif self.arch == "bilstm":
+            x, (_,_) = self.lstm(x)
+            x = F.leaky_relu(x, negative_slope=self.neg_slope)
+            x = self.fc_out(x)
+        
+        else:
+            x = self.fc_in(x)
+            x = F.leaky_relu(x, negative_slope=self.neg_slope)
+            x = self.fc_1(x)
+            x = F.leaky_relu(x, negative_slope=self.neg_slope)
+            x = self.fc_out(x)
+        
+        return x

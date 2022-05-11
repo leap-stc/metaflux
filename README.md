@@ -40,8 +40,6 @@ fluxnet_test = metaflux.dataloader.Fluxmetanet(root=root_dir, mode="test", batch
 maml = metaflux.metalearner.Meta(hyper_args, model_config)
 
 # training
-from torch.utils.data import DataLoader
-
 db_train = DataLoader(fluxnet_train, hyper_args["task_num"], shuffle=True, num_workers=0)
 for step, (x_spt, y_spt, x_qry, y_qry) in enumerate(db_train):
     x_spt, y_spt, x_qry, y_qry = x_spt.to(device), y_spt.to(device), x_qry.to(device), y_qry.to(device)
@@ -53,6 +51,8 @@ for x_spt, y_spt, x_qry, y_qry in db_test:
     x_spt, y_spt, x_qry, y_qry = x_spt.squeeze(0).to(device), y_spt.squeeze(0).to(device), x_qry.squeeze(0).to(device), y_qry.squeeze(0).to(device)
     loss = maml.finetuning(x_spt, y_spt, x_qry, y_qry)
 ```
+
+![Screenshot](docs/GPP_infer.jpeg)
 
 ## TO-DO:
 - [x] Initializing base-learner and model specification
