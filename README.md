@@ -19,7 +19,7 @@ pip install -r requirements.txt
 3. On terminal, you can run a sample training script using FLUXNET stations data, meta-learned on the tropics
 ```
 cd metaflux
-python train.py -i "./data/tropics", -t "GPP_NT_VUT_REF" -m "bilstm"
+python train.py -i "./data/tropics", -t "GPP_NT_VUT_REF"
 ```
 
 ![Meta inference](https://github.com/juannat7/metaflux/blob/main/docs/gpp_infer.jpeg)
