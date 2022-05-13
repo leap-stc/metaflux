@@ -28,7 +28,7 @@ python train.py -i "./data/tropics", -t "GPP_NT_VUT_REF" -m "bilstm"
 You can customize the package by changing the hyperparameters and base-learners
 1. Import the package into your notebook or IDE: 
 ```
-import metaflux
+from metaflux import metaflux
 import torch
 from torch.utils.data import DataLoader
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
