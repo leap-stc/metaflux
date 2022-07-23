@@ -12,7 +12,7 @@ class Fluxmetanet(Dataset):
     feature in climate data products. 
     """
 
-    def __init__(self, root, mode, batchsz, n_way, k_shot, k_query, x_columns, y_column, time_column="TIMESTAMP_START", time_agg="1H", seasonality=24):
+    def __init__(self, root, mode, batchsz, n_way, k_shot, k_query, x_columns, y_column, time_column="TIMESTAMP_START", time_agg=None, seasonality=None):
         """
         Initializing the Fluxmetanet Dataset class
         Parameters:
@@ -41,7 +41,8 @@ class Fluxmetanet(Dataset):
         self.ycolumns = [y_column]
         self.timecolumn = time_column
         self.time_agg = time_agg
-        self.seasonality = seasonality
+        if seasonality == None:
+            self.seasonality = 1
         
         print('shuffle DB :%s, b:%d, %d-way, %d-shot, %d-query' % (mode, batchsz, n_way, k_shot, k_query))
 
@@ -109,9 +110,9 @@ class Fluxmetanet(Dataset):
             
             # 1.select n_way labels randomly
             if self.mode == "train":
-                selected_cls = np.random.choice(self.cls_num, self.n_way, replace=False)
+                selected_cls = np.random.choice(self.cls_num, self.n_way, replace=True)
             else:
-                selected_cls = np.random.choice(self.cls_num, max(2, self.cls_num - 1), replace=False) # take n-1 or at least 2 labels randomly
+                selected_cls = np.random.choice(self.cls_num, max(2, self.cls_num - 1), replace=True) # take n-1 or at least 2 labels randomly
             
             for cls in tqdm(selected_cls):
                 try:
@@ -119,7 +120,8 @@ class Fluxmetanet(Dataset):
                     cls_df = pd.read_csv(cls_csv, index_col=None, header=0)
 
                     # Aggregate time (generally to smooth out noisy observations)
-                    cls_df = cls_df.set_index(pd.DatetimeIndex(cls_df[self.timecolumn])).resample(self.time_agg).mean()
+                    if self.time_agg != None:
+                        cls_df = cls_df.set_index(pd.DatetimeIndex(cls_df[self.timecolumn])).resample(self.time_agg).mean()
 
                     # Gap-filling and normalize data (except for the target variable)
                     cls_df = cls_df.fillna(method="ffill")[self.xcolumns + self.ycolumns] # forward fill
@@ -217,17 +219,20 @@ class Fluxmetanet(Dataset):
         return self.batchsz
 
 
-def generate_base_metadata(root, mode, batchsz, n_way, k_shot, k_query, x_columns, y_column, time_column="TIMESTAMP_START", time_agg="1H", seasonality=24):
-    columns = [time_column] + x_columns + [y_column]
+def generate_base_metadata(root, mode, batchsz, n_way, k_shot, k_query, x_columns, y_column, time_column=None, time_agg=None, seasonality=None):
+    if time_column != None:
+        columns = [time_column] + x_columns + [y_column]
+    else:
+        columns = x_columns + [y_column]
     
     csv_files = glob.glob(os.path.join(root, mode) + "/*.csv")
     
     if mode == "train":
         samplesz = k_shot
-        selected_cls = np.random.choice(len(csv_files), n_way, False)
+        selected_cls = np.random.choice(len(csv_files), n_way, True)
     else:
         samplesz = k_query
-        selected_cls = np.random.choice(len(csv_files), max(2, len(csv_files) - 1), replace=False) # take n-1 or at least 2 labels randomly
+        selected_cls = np.random.choice(len(csv_files), max(2, len(csv_files) - 1), replace=True) # take n-1 or at least 2 labels randomly
 
     data_li = torch.Tensor()
 
@@ -235,15 +240,23 @@ def generate_base_metadata(root, mode, batchsz, n_way, k_shot, k_query, x_column
         try:
             cls_csv = csv_files[cls]
             df = pd.read_csv(cls_csv, index_col=None, header=0)
-            df = df.set_index(pd.DatetimeIndex(df[time_column])).resample(time_agg).mean()
-            df = df.fillna(method="ffill")[columns[1:]]
-            df = df.fillna(method="bfill")[columns[1:]]
+            if time_agg != None:
+                df = df.set_index(pd.DatetimeIndex(df[time_column])).resample(time_agg).mean()
+            if time_column != None:
+                df = df.fillna(method="ffill")[columns[1:]]
+                df = df.fillna(method="bfill")[columns[1:]]
+            else:
+                df = df.fillna(method="ffill")[columns[:]]
+                df = df.fillna(method="bfill")[columns[:]]
             df = df.dropna()
             df.loc[:, df.columns != y_column] = (df.loc[:, df.columns != y_column] - df.loc[:, df.columns != y_column].mean()) / df.loc[:, df.columns != y_column].std() # normalize
             #df = (df - df.mean()) / df.std()
             
             # generate series
-            n = seasonality
+            if seasonality != None:
+                n = seasonality
+            else:
+                n = 1
                 
             series_df = np.empty((len(df) - n, n, df.shape[1]))
             for i in range(len(df) - n):

@@ -126,6 +126,9 @@ class Learner(nn.Module):
             
             elif name == "leakyrelu":
                 x = F.leaky_relu(x, negative_slope=param[0])
+                
+            elif name == "relu":
+                x = F.relu(x)
 
             else:
                 raise NotImplementedError

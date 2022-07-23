@@ -53,7 +53,7 @@ fluxnet_train = metaflux.dataloader.Fluxmetanet(root=root_dir, mode="train", bat
 fluxnet_test = metaflux.dataloader.Fluxmetanet(root=root_dir, mode="test", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column='GPP_NT_VUT_REF', time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
 ```
 
-5. Training metalearner given our base-learner and dataloader:
+5. Training metalearner given our base-learner and dataloader for 1 epoch:
 ```
 maml = metaflux.metalearner.Meta(hyper_args, model_config)
 

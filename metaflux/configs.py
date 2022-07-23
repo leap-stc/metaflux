@@ -16,6 +16,9 @@ def get_hyperparams(config_path='metaflux/configs/hyperparams.yaml'):
     with open(config_path, 'r') as stream:
         args = yaml.safe_load(stream)
 
+    if args["input_size"] != len(args["xcolumns"]):
+        args["input_size"] = len(args["xcolumns"])
+
     return args
 
 
@@ -59,9 +62,25 @@ def get_config(model, args=None):
 
     else:
         config = [
-            ("bilstm", [args["hidden_size"]*4,args["input_size"],args["hidden_size"]]),
-            ("leakyrelu", [0.01]),
-            ("linear", [1,2*args["hidden_size"]])
+           ("bilstm", [args["hidden_size"]*4,args["input_size"],args["hidden_size"]]),
+           ("relu", []),
+           ("linear", [1,2*args["hidden_size"]])
         ]
+        
+        #config = [
+        #    ("bilstm", [args["hidden_size"]*4,args["input_size"],args["hidden_size"]]),
+        #    ("leakyrelu", [0.01]),
+        #    ("linear", [1,2*args["hidden_size"]])
+        #]
+        
+        # config = [
+        #     ("bilstm", [args["hidden_size"]*4,args["input_size"],args["hidden_size"], args["num_lstm_layers"]]),
+        #     #("leakyrelu", [0.01]),
+        #     ("linear", [4*args["hidden_size"],2*args["hidden_size"]]),
+        #     ("leakyrelu", [0.01]),
+        #     ("linear", [2*args["hidden_size"],4*args["hidden_size"]]),
+        #     ("leakyrelu", [0.01]),
+        #     ("linear", [1,2*args["hidden_size"]])
+        # ]
     
     return config

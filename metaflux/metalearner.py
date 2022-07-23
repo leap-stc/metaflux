@@ -53,7 +53,7 @@ class Meta(nn.Module):
         for i in range(setsz):
             # 1. run the i-th task and compute loss for k=0
             preds = self.net(x_spt[:,i,k,:,:], vars=None)
-            loss = F.mse_loss(preds.squeeze()[-1:], y_spt[:,i,0].squeeze())
+            loss = F.mse_loss(preds.view(-1), y_spt[:,i,k])
             grad = torch.autograd.grad(loss, self.net.parameters(), allow_unused=True)
             fast_params = list(map(lambda p: p[1] - self.update_lr * p[0], zip(grad, self.net.parameters())))
             fast_weights = nn.ParameterList()
@@ -63,19 +63,19 @@ class Meta(nn.Module):
             # this is the loss and accuracy before first update
             with torch.no_grad():
                 preds_q = self.net(x_qry[:,i,k,:,:], self.net.parameters())
-                loss_q = F.mse_loss(preds_q.squeeze()[-1:], y_qry[:,i,0])
+                loss_q = F.mse_loss(preds_q.view(-1)[-1:], y_qry[:,i,k])
                 losses_q[0] += loss_q.item()
 
             # this is the loss and accuracy after the first update
             with torch.no_grad():
                 logits_q = self.net(x_qry[:,i,0,:,:], fast_weights)
-                loss_q = F.mse_loss(logits_q.squeeze()[-1:], y_qry[:,i,0])
+                loss_q = F.mse_loss(logits_q.view(-1)[-1:], y_qry[:,i,k])
                 losses_q[1] += loss_q.item()
 
             for k in range(1, self.update_step):
                 # 1. run the i-th task and compute loss for k=1~K-1 (ie. update_step)
-                preds = self.net(x_spt[:,i,k,:,:], fast_weights)
-                loss = F.mse_loss(preds.squeeze()[-1:], y_spt[:,i,k])
+                preds_q = self.net(x_spt[:,i,k,:,:], fast_weights)
+                loss = F.mse_loss(preds_q.view(-1)[-1:], y_spt[:,i,k])
                 # 2. compute grad on theta_pi
                 grad = torch.autograd.grad(loss, fast_weights)
                 # 3. theta_pi = theta_pi - train_lr * grad
@@ -86,7 +86,7 @@ class Meta(nn.Module):
 
                 preds_q = self.net(x_qry[:,i,k,:,:], fast_weights)
                 # loss_q will be overwritten and just keep the loss_q on last update step.
-                loss_q = F.mse_loss(preds_q.squeeze()[-1:], y_qry[:,i,k])
+                loss_q = F.mse_loss(preds_q.view(-1)[-1:], y_qry[:,i,k])
                 losses_q[k + 1] += loss_q.item()
                 if k + 1 == self.update_step:
                     loss_q = loss_q / setsz
@@ -125,7 +125,7 @@ class Meta(nn.Module):
         # 1. run the i-th task and compute loss for k=0
         for i in range(setsz):
             preds_q = net(x_spt[i:i+1,k,:,:])
-            loss = F.mse_loss(preds_q.squeeze()[-1:], y_spt[i,0].squeeze())
+            loss = F.mse_loss(preds_q.view(-1)[-1:], y_spt[i,k].squeeze())
             grad = torch.autograd.grad(loss, net.parameters())
             fast_params = list(map(lambda p: p[1] - self.update_lr * p[0], zip(grad, net.parameters())))
             fast_weights = nn.ParameterList()
@@ -135,19 +135,19 @@ class Meta(nn.Module):
             # this is the loss and accuracy before first update
             with torch.no_grad():
                 preds_q = net(x_qry[i:i+1,k,:,:], net.parameters())
-                loss_q = F.mse_loss(preds_q.squeeze()[-1:], y_qry[i,0])
+                loss_q = F.mse_loss(preds_q.view(-1)[-1:], y_qry[i,k])
                 losses_q[0] += loss_q.item()
 
             # this is the loss and accuracy after the first update
             with torch.no_grad():
                 y_preds = net(x_qry[i:i+1,k,:,:], fast_weights)
-                loss_q = F.mse_loss(y_preds.squeeze()[-1:], y_qry[i,0])
+                loss_q = F.mse_loss(preds_q.view(-1)[-1:], y_qry[i,k])
                 losses_q[1] += loss_q.item()
 
             for k in range(1, self.update_step_test):
                 # 1. run the i-th task and compute loss for k=1~K-1
-                preds = net(x_spt[i:i+1,k,:,:], fast_weights)
-                loss = F.mse_loss(preds.squeeze()[-1:], y_spt[i,k])
+                preds_q = net(x_spt[i:i+1,k,:,:], fast_weights)
+                loss = F.mse_loss(preds_q.view(-1)[-1:], y_spt[i,k])
                 # 2. compute grad on theta_pi
                 grad = torch.autograd.grad(loss, fast_weights)
                 # 3. theta_pi = theta_pi - train_lr * grad
@@ -158,7 +158,7 @@ class Meta(nn.Module):
 
                 preds_q = net(x_qry[i:i+1,k,:,:], fast_weights)
                 # loss_q will be overwritten and just keep the loss_q on last update step.
-                loss_q = F.mse_loss(preds_q.squeeze()[-1:], y_qry[i,k])
+                loss_q = F.mse_loss(preds_q.view(-1)[-1:], y_qry[i,k])
                 losses_q[k + 1] += loss_q.item()
 
         del net
