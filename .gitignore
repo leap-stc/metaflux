@@ -1,5 +1,5 @@
 metaflux/configs/*
-!metaflux/configs/hyperparams.yaml
+!metaflux/configs/hyperparams_*.yaml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

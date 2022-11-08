@@ -1,229 +1,277 @@
 import torch
 from torch import nn
-from torch.nn import functional as F
+from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
+import numpy as np
+import learn2learn as l2l
+import copy
+from .model import Model
+from .encoder import Encoder
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class Learner(nn.Module):
+class Learner():
     """
     Defining the base learner. Currently supports 'linear', 'lstm', and 'bilstm' 
 
     Params:
     -------
-    config: dict
-        A dictionary containing the specification of models
     input_size: int
         The expected input size to the model
     hidden_size: int
         The expected hidden size to the model
+    model_type: str
+        The base model type, currently supports ["mlp", "lstm", "bilstm"]
     """
-    def __init__(self, config, input_size, hidden_size):
+    def __init__(
+        self, 
+        input_size: int, 
+        hidden_size: int, 
+        model_type: str, 
+        fluxnet_train,
+        fluxnet_test,
+        update_lr,
+        meta_lr,
+        batch_size,
+        max_meta_step,
+        finetune_size,
+        encoder_hidden_size: int = 32,
+        with_context: bool = False,
+        with_baseline: bool = False
+    ) -> None:
+
         super(Learner, self).__init__()
-        self.config = config
         self.input_size = input_size
         self.hidden_size = hidden_size
-        
-        #it contains all tensors that need to be optimized
-        self.vars = nn.ParameterList()
-        
-        
-        for i, (name, param) in enumerate(self.config):
+        self.model_type = model_type
+        self.fluxnet_train = fluxnet_train
+        self.fluxnet_test = fluxnet_test
+        self.update_lr = update_lr
+        self.meta_lr = meta_lr
+        self.batch_size = batch_size
+        self.max_meta_step = max_meta_step
+        self.finetune_size = finetune_size
+        self.encoder_hidden_size = encoder_hidden_size
+        self.with_context = with_context
+        self.with_baseline = with_baseline
+        self.encoder_input_size = next(iter(fluxnet_train))[0].shape[-1] - self.input_size
+        self.loss = nn.MSELoss(reduction="mean")
 
-            if name == 'linear':
-                w = nn.Parameter(torch.ones(*param, dtype=torch.float64, device=device))
-                torch.nn.init.kaiming_normal_(w)
-                self.vars.append(w)
-                self.vars.append(nn.Parameter(torch.zeros(param[0], dtype=torch.float64, device=device)))
+        self.meta_loss_metric = dict()
+        if self.with_baseline:
+            self.base_loss_metric = dict()
 
-            elif name == 'lstm':
-                self.lstm = torch.nn.LSTM(input_size = self.input_size, 
-                                     hidden_size = self.hidden_size,
-                                     bidirectional=False,
-                                     num_layers=1, 
-                                     batch_first=True)
-                # ih_layer
-                w1 = nn.Parameter(torch.ones(param[0:2], dtype=torch.float64, device=device))
-                torch.nn.init.kaiming_normal_(w1)
-                self.vars.append(w1)
-                self.vars.append(nn.Parameter(torch.zeros(param[0], dtype=torch.float64, device=device)))
-                # hh_layer
-                w2 = nn.Parameter(torch.ones((param[0], param[2]), dtype=torch.float64, device=device))
-                torch.nn.init.kaiming_normal_(w2)
-                self.vars.append(w2)
-                self.vars.append(nn.Parameter(torch.zeros(param[0], dtype=torch.float64, device=device)))
-            
-            elif name == 'bilstm':
-                self.lstm = torch.nn.LSTM(input_size = self.input_size, 
-                                     hidden_size = self.hidden_size,
-                                     bidirectional=True,
-                                     num_layers=1, 
-                                     batch_first=True)
-                # ih_layer
-                w1 = nn.Parameter(torch.ones(param[0:2], dtype=torch.float64, device=device))
-                torch.nn.init.kaiming_normal_(w1)
-                self.vars.append(w1)
-                self.vars.append(nn.Parameter(torch.zeros(param[0], dtype=torch.float64, device=device)))
-                # hh_layer
-                w2 = nn.Parameter(torch.ones((param[0], param[2]), dtype=torch.float64, device=device))
-                torch.nn.init.kaiming_normal_(w2)
-                self.vars.append(w2)
-                self.vars.append(nn.Parameter(torch.zeros(param[0], dtype=torch.float64, device=device)))
+
+    def train_meta(
+        self, 
+        runs, 
+        epochs, 
+        verbose=False
+    ) -> None:
+        """Main function to train metalearning algorithm"""
+
+        for run in range(0,runs):
+            self.model = Model(
+                self.model_type,
+                self.input_size,
+                self.hidden_size,
+                self.encoder_hidden_size,
+                self.with_context
+            ).to(device)
+            self.maml = l2l.algorithms.MAML(self.model, lr=self.update_lr, first_order=False)
+            opt = torch.optim.Adam(self.maml.parameters(), lr=self.meta_lr)
+            schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+
+            if self.with_context:
+                self.encoder = Encoder(
+                    input_size = self.encoder_input_size,
+                    hidden_size = self.encoder_hidden_size
+                ).double().to(device)
                 
-                # ih_layer_reverse
-                w3 = nn.Parameter(torch.ones(param[0:2], dtype=torch.float64, device=device))
-                torch.nn.init.kaiming_normal_(w3)
-                self.vars.append(w3)
-                self.vars.append(nn.Parameter(torch.zeros(param[0], dtype=torch.float64, device=device)))
-                # hh_layer_reverse
-                w4 = nn.Parameter(torch.ones((param[0], param[2]), dtype=torch.float64, device=device))
-                torch.nn.init.kaiming_normal_(w4)
-                self.vars.append(w4)
-                self.vars.append(nn.Parameter(torch.zeros(param[0], dtype=torch.float64, device=device)))
-
-                
-            elif name in ['tanh', 'relu', 'flatten', 'reshape', 'leakyrelu', 'sigmoid']:
-                continue
+                encoder_opt = torch.optim.Adam(self.encoder.parameters(), lr=self.update_lr)
+                encoder_schedule = torch.optim.lr_scheduler.CosineAnnealingLR(encoder_opt, T_max=epochs)
             else:
-                raise NotImplementedError
-        
-            
-    def forward(self, x, vars=None, is_train=True):
-        """
-        :param x
-        :param vars
-        :return x
-        """
-            
-        if is_train and vars != None:
-            # assign new parameters to the network if it is training
-            for i, param in enumerate(self.vars):
-                self.vars[i] = vars[i]
-            
-            
-        idx = 0
+                self.encoder, encoder_opt, encoder_schedule = None, None, None
 
-        for name, param in self.config:
-            if name == "lstm":
-                self.lstm.weight_ih_l0, self.lstm.bias_ih_l0 = self.vars[idx], self.vars[idx + 1]
-                self.lstm.weight_hh_l0, self.lstm.bias_hh_l0 = self.vars[idx + 2], self.vars[idx + 3]
+            train_epoch, val_epoch = list(), list()
+            
+            for epoch in range(epochs):
+                opt.zero_grad()
+                if self.with_context:
+                    encoder_opt.zero_grad()
+                    
+                train_error, val_error = 0.0, 0.0
+
+                # Meta-training
+                with torch.backends.cudnn.flags(enabled=False):
+                    learner = self.maml.clone().double()
+                    db_train = DataLoader(self.fluxnet_train, batch_size=self.batch_size, shuffle=True)
+                    max_steps = min(self.max_meta_step, len(db_train))
+
+                    for step, (x, y) in enumerate(db_train):
+                        x, y = x.to(device), y.to(device)
+                        support_x, query_x, support_y, query_y = train_test_split(x, y, test_size=0.2, random_state=42)
+                        pred = self._get_pred(support_x, learner)
+                        error = self.loss(pred, support_y)
+                        learner.adapt(error)
+
+                        # Evaluation
+                        pred = self._get_pred(query_x, learner)
+                        error = self.loss(pred, query_y)
+                        error.backward(retain_graph=True)
+                        train_error += error.item()
+
+                        if (step + 1) == max_steps:
+                            break
+                    
+                    self._grad_step(step, opt, schedule, encoder_opt, encoder_schedule)
+
+                    # Meta-testing
+                    learner = self.maml.clone(first_order=True).double()
+                    db_test = DataLoader(self.fluxnet_test, batch_size=self.batch_size, shuffle=True)
+                    max_steps = min(self.max_meta_step, len(db_test))
+                    
+                    for step, (x, y) in enumerate(db_test):
+                        x, y = x.to(device), y.to(device)
+                        support_x, query_x, support_y, query_y = train_test_split(x, y, test_size=self.finetune_size, random_state=42)
+                        
+                        # Finetuning
+                        pred = self._get_pred(support_x, learner)
+                        error = self.loss(pred, support_y)
+                        learner.adapt(error)
+
+                        # Evaluation
+                        pred = self._get_pred(query_x, learner)
+                        error = self.loss(pred, query_y)
+                        val_error += error.item()
+
+                        if (step + 1) == max_steps:
+                            train_epoch.append(train_error/(step + 1))
+                            val_epoch.append(val_error/(step + 1))
+                            break
                 
-                x, (_, _) = self.lstm(x)
-                idx += 4
+                if verbose and ((epoch % 50 == 0) or (epoch == (epochs - 1))):
+                    print(f'Epoch: {epoch}, training loss: {train_epoch[epoch]}, validation loss: {val_epoch[epoch]}')
+
+            self.meta_loss_metric.update({
+                f"train_epoch_{run}": np.sqrt(np.array(train_epoch)),
+                f"val_epoch_{run}": np.sqrt(np.array(val_epoch))
+            })
+
+            if self.with_baseline:
+                self._train_base(runs, epochs, verbose)
+
+    def _train_base(
+        self, 
+        runs, 
+        epochs, 
+        verbose=False
+    ) -> None:
+        """Only active when with_baseline parameter is True: train a baseline without the MAML algorithm"""
+
+        for run in range(0,runs):
+            self.base_model = Model(
+                self.model_type,
+                self.input_size,
+                self.hidden_size,
+                self.encoder_hidden_size,
+                with_context=False
+            ).double().to(device)
+            opt = torch.optim.Adam(self.base_model.parameters(), lr=self.update_lr)
+            schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+            train_epoch, val_epoch = list(), list()
+            
+            for epoch in range(epochs):
+                opt.zero_grad()
+                train_error, val_error = 0.0, 0.0
+
+                # Training
+                with torch.backends.cudnn.flags(enabled=False):
+                    db_train = DataLoader(self.fluxnet_train, batch_size=self.batch_size, shuffle=True)
+                    max_steps = min(self.max_meta_step, len(db_train))
+
+                    for step, (x, y) in enumerate(db_train):
+                        x, y = x.to(device), y.to(device)
+                        train_x, test_x, train_y, test_y = train_test_split(x, y, test_size=0.2, random_state=42)
+                        pred = self.base_model(train_x[:,:,:self.input_size])
+                        error = self.loss(pred, train_y)
+                        error.backward()
+                        opt.step()
+                        train_error += self.loss(self.base_model(test_x[:,:,:self.input_size]), test_y).item()
+
+                        if (step + 1) == max_steps:
+                            schedule.step()
+                            break
+
+                    # Testing
+                    db_test = DataLoader(self.fluxnet_test, batch_size=self.batch_size, shuffle=True)
+                    max_steps = min(self.max_meta_step, len(db_test))
+                    model_copy = copy.deepcopy(self.base_model)
+                    opt_copy = torch.optim.Adam(model_copy.parameters(), lr=self.update_lr)
+
+                    for step, (x, y) in enumerate(db_test):
+                        opt_copy.zero_grad()
+                        x, y = x.to(device), y.to(device)
+                        train_x, test_x, train_y, test_y = train_test_split(x, y, test_size=self.finetune_size, random_state=42)
+                        pred = model_copy(train_x[:,:,:self.input_size])
+                        error = self.loss(pred, train_y)
+
+                        # Akin to finetuning/adaptation step in meta-learning
+                        error.backward()
+                        opt_copy.step()
+                        train_error += error.item()
+
+                        with torch.no_grad():
+                            pred = model_copy(test_x[:,:,:self.input_size])
+                            error = self.loss(pred, test_y)
+                            val_error += error.item()
+                        
+                        if (step + 1) == max_steps:
+                            train_epoch.append(train_error/(step + 1))
+                            val_epoch.append(val_error/(step + 1))
+                            del model_copy, opt_copy
+                            break
                 
-            elif name == "bilstm":
-                self.lstm.weight_ih_l0, self.lstm.bias_ih_l0 = self.vars[idx], self.vars[idx + 1]
-                self.lstm.weight_hh_l0, self.lstm.bias_hh_l0 = self.vars[idx + 2], self.vars[idx + 3]
-                self.lstm.weight_ih_l0_reverse, self.lstm.bias_ih_l0_reverse = self.vars[idx + 4], self.vars[idx + 5]
-                self.lstm.weight_hh_l0_reverse, self.lstm.bias_hh_l0_reverse = self.vars[idx + 6], self.vars[idx + 7]
-                
-                x, (_, _) = self.lstm(x)
-                idx += 8
-            
-            elif name == "linear":
-                w, b = self.vars[idx], self.vars[idx + 1]
-                x = F.linear(x, w, b)
-                idx += 2
-            
-            elif name == "leakyrelu":
-                x = F.leaky_relu(x, negative_slope=param[0])
-                
-            elif name == "relu":
-                x = F.relu(x)
+                if verbose and ((epoch % 50 == 0) or (epoch == (epochs - 1))):
+                    print(f'Epoch: {epoch}, training loss: {train_epoch[epoch]}, validation loss: {val_epoch[epoch]}')
 
-            else:
-                raise NotImplementedError
+            self.base_loss_metric.update({
+                f"train_epoch_{run}": np.sqrt(np.array(train_epoch)),
+                f"val_epoch_{run}": np.sqrt(np.array(val_epoch))
+            })
 
-        # make sure variable is used properly
-        assert idx == len(self.vars)
+    
+    def _get_pred(
+        self, 
+        x, 
+        learner
+    ) -> None:
+        "Subroutine to perform prediction on input x"
+
+        if self.with_context:
+            encoding = self.encoder(x[:,:,self.input_size:])
+            learner.module.update_encoding(encoding)
+
+        return learner(x[:,:,:self.input_size])
+
+    def _grad_step(
+        self, 
+        step,
+        opt,
+        schedule,
+        encoder_opt,
+        encoder_schedule
+    ) -> None:
+        "Subroutine to perform gradient step"
+
+        for _, p in self.maml.named_parameters():
+            p.grad.data.mul_(1.0/(step + 1))
         
-        return x
-
-
-    def zero_grad(self, vars=None):
-        """
-
-        :param vars:
-        :return:
-        """
-        with torch.no_grad():
-            if vars == None:
-                for p in self.vars:
-                    if p.grad is not None:
-                        p.grad.zero_()
-            else:
-                for p in vars:
-                    if p.grad is not None:
-                        p.grad.zero_()
-
-    def parameters(self):
-        """
-        override this function since initial parameters will return with a generator.
-        :return:
-        """
-        return self.vars
-
-
-class BaseMeta(nn.Module):
-    """
-    Defining the base learner (for use without meta-learning)
-    TODO: use config to define model structure as meta-learning approach above
-
-    Params:
-    -------
-    config: dict
-        A dictionary containing the specification of models
-    input_size: int
-        The expected input size to the model
-    hidden_size: int
-        The expected hidden size to the model
-    """
-
-    def __init__(self, input_size, hidden_size, arch, neg_slope=0.01):
-        super(BaseMeta, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.arch = arch
-        self.neg_slope = neg_slope
+        opt.step()
+        schedule.step()
         
-        if self.arch == "lstm":
-            self.lstm = torch.nn.LSTM(input_size = self.input_size, 
-                                        hidden_size = self.hidden_size,
-                                        bidirectional=False,
-                                        num_layers=2, 
-                                        batch_first=True)
-                                        
-            self.fc_out = torch.nn.Linear(self.hidden_size, 1) #for unidirectional
-            
-        elif self.arch == "bilstm":
-            self.lstm = torch.nn.LSTM(input_size = self.input_size, 
-                            hidden_size = self.hidden_size,
-                            bidirectional=True,
-                            num_layers=2, 
-                            batch_first=True)
-
-            self.fc_out = torch.nn.Linear(2*self.hidden_size, 1) #for bidirectional
-            
-        else:
-            self.fc_in = torch.nn.Linear(self.input_size, self.hidden_size)
-            self.fc_1 = torch.nn.Linear(self.hidden_size, self.hidden_size)
-            self.fc_out = torch.nn.Linear(self.hidden_size, 1)
-        
-    def forward(self, x):
-        if self.arch == "lstm":
-            x, (_,_) = self.lstm(x)
-            x = F.leaky_relu(x, negative_slope=self.neg_slope)
-            x = self.fc_out(x)
-
-        elif self.arch == "bilstm":
-            x, (_,_) = self.lstm(x)
-            x = F.leaky_relu(x, negative_slope=self.neg_slope)
-            x = self.fc_out(x)
-        
-        else:
-            x = self.fc_in(x)
-            x = F.leaky_relu(x, negative_slope=self.neg_slope)
-            x = self.fc_1(x)
-            x = F.leaky_relu(x, negative_slope=self.neg_slope)
-            x = self.fc_out(x)
-        
-        return x
+        if self.with_context:
+            for _, p in self.encoder.named_parameters():
+                p.grad.data.mul_(1.0/(step + 1))
+            encoder_opt.step()
+            encoder_schedule.step()

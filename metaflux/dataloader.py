@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import make_column_transformer
 
 class Fluxmetanet(Dataset):
     """
@@ -12,54 +14,50 @@ class Fluxmetanet(Dataset):
     feature in climate data products. 
     """
 
-    def __init__(self, root, mode, batchsz, n_way, k_shot, k_query, x_columns, y_column, time_column="TIMESTAMP_START", time_agg=None, seasonality=None):
+    def __init__(self, root, mode, x_columns, y_column, context_columns=None, time_column="TIMESTAMP_START", time_agg=None, time_window=1):
         """
         Initializing the Fluxmetanet Dataset class
         Parameters:
         -----------
         root <str>: root path of dataset (before <mode>) in CSV, in the following structure: <class>/<mode>/<filenames>.csv
-        mode <str>: train, val or test
-        batchsz <int>: batch size of inputs
-        n_way <int>: the number of classes under consideration
-        k_shot <int>: the number of shots samples per class (ie. similar to a supervised training dataset)
-        k_query <int>: the number of query samples per class (ie. similar to a supervised testing dataset)
+        mode <str>: train or test (ie. metatrain or metatest)
         x_columns <list>: list containing the column names of input features
         y_column <str>: the name of column for target variable
+        context_columns <list>:  list containing the column names of contextual features
         time_column <str>: the name of column indicating time (must be of DateTime object)
         time_agg <str>: how to aggregate time across observations, defaults to 1H (must be compatible with DateTime object)
-        seasonality <int>: seasonality by which we are generating the data window 
+        time_window <int>: the size of a time window 
         """
+        assert mode in ["train", "test"]
 
         self.mode = mode
-        self.batchsz = batchsz
-        self.n_way = n_way
-        self.k_shot = k_shot
-        self.k_query = k_query
-        self.setsz = self.n_way * self.k_shot
-        self.querysz = self.n_way * self.k_query
-        self.xcolumns =  x_columns
-        self.ycolumns = [y_column]
-        self.timecolumn = time_column
+        self.x_columns =  x_columns
+        if type(y_column) != list:
+            self.y_column = [y_column]
+        self.context_columns = context_columns
+        self.time_column = time_column
         self.time_agg = time_agg
-        if seasonality == None:
-            self.seasonality = 1
-        
-        print('shuffle DB :%s, b:%d, %d-way, %d-shot, %d-query' % (mode, batchsz, n_way, k_shot, k_query))
+        self.time_window = time_window
 
-        # Get and read CSV files
-        csvdata = self.load_csv(os.path.join(root, mode))
-        self.data = []
-        for i, (k, v) in enumerate(csvdata.items()):
-            self.data.append(v)
+        # Fit a one-hot encoder for PFT
+        if self.context_columns != None and 'PFT' in self.context_columns:
+            pft_list = list()
+            for mode in ["train", "test"]:
+                csv_files = glob.glob(os.path.join(root, mode) + "/*.csv")
+                for file in csv_files:
+                    df = pd.read_csv(file, index_col=False, header=0)
+                    for _, row in df.iterrows():
+                        pft_list.append(row['PFT'])
+            pft_list = np.array(list(set(pft_list)))
+            self.enc = OneHotEncoder()
+            self.enc.fit(pft_list.reshape(-1,1))
 
-        self.cls_num = len(self.data)
+        # Generate series from CSV files
+        self.data = self.create_data(os.path.join(root, mode))
 
-        # Dataset batching
-        self.create_batch(self.batchsz)
-
-    def load_csv(self, csvf):
+    def create_data(self, csvf):
         """
-        Return a dict saving the information of our CSVs
+        Return a list of timeseries data from CSV files
 
         Parameters:
         -----------
@@ -68,108 +66,54 @@ class Fluxmetanet(Dataset):
         
         Returns:
         --------
-        labels <dict>: {label1:[file1],...} since each CSV file is considered as one label, there exists only one file per label
+        timeseries <List[DataFrame]>: list of timeseries data
         """
         csv_files = glob.glob(csvf + "/*.csv")
-        dict_labels = {}
-        for i, file in enumerate(csv_files):
-            label = file.split("/")[-1].split(".csv")[0]
+        for file in csv_files:
+            df = pd.read_csv(file, index_col=False, header=0)
+            df = df.loc[:,~df.columns.str.match("Unnamed")]
 
-            # append filename to current label
-            if label in dict_labels.keys():
-                dict_labels[label].append(file)
+            # Preprocessing for timeseries dataset: aggregation, gap-filling, normalizing of inputs
+            try:
+                df = self._temporal_preprocessing(df)
+                timeseries_d = self._generate_series(df, n=self.time_window)
+            except:
+                continue
+
+            # Generate timeseries
+            try:
+                all_data = np.concatenate([all_data, timeseries_d])
+            except:
+                all_data = timeseries_d
+
+        return all_data
+
+    def _temporal_preprocessing(self, df):
+        "Temporal aggregation, gap filling, and normalizing input variables"
+        if self.time_agg != None:
+            df = df.set_index(pd.DatetimeIndex(df[self.time_column])).sort_index().resample(self.time_agg).mean()
+
+        if self.context_columns != None:
+            if 'PFT' in self.context_columns:
+                onehot_df = pd.DataFrame(self.enc.transform(df['PFT'].values.reshape(-1,1)).toarray())
+                df = df[self.y_column + self.x_columns + [x for x in self.context_columns if x != 'PFT']]
+                df = pd.concat([df, onehot_df], axis=1)
+                df = df[df.columns.tolist()[1:] + df.columns.tolist()[:1]] # swap y to the last column
             else:
-                dict_labels[label] = [file]
+                df = df[self.x_columns + self.context_columns + self.y_column]
 
-        return dict_labels
+        else:
+            df = df[self.x_columns + self.y_column]
 
-    def create_batch(self, batchsz):
-        """
-        Create batch for meta-learning
-        Parameters:
-        -----------
-        batchsz <int>: batch size
+        # Gap-filling and normalize data (except for the target variable)
+        df = df.fillna(method="ffill") # forward fill
+        df = df.fillna(method="bfill") # backward fill
+        df.loc[:, df.columns.isin(self.x_columns)] = (df.loc[:, df.columns.isin(self.x_columns)] - df.loc[:, df.columns.isin(self.x_columns)].mean()) / df.loc[:, df.columns.isin(self.x_columns)].std()
+        df.dropna(inplace=True)
 
-        Returns:
-        --------
-        support_x: (batchsz, cls_num, k_shot, seq_len, n_feature)
-        support_y: (batchsz, cls_num, k_shot, seq_len, n_feature)
-        query_x: (batchsz, cls_num, k_shot, seq_len, n_feature)
-        query_y: (batchsz, cls_num, k_shot, seq_len, n_feature)
-        """
-        self.support_x_batch = []  # support set batch (x)
-        self.support_y_batch = []  # support set batch (y)
-        self.query_x_batch = []  # query set batch (x)
-        self.query_y_batch = []  # query set batch (y)
-        
-        for b in range(batchsz):  # for each batch
-            support_x = []
-            support_y = []
-            query_x = []
-            query_y = []
+        return df
             
-            # 1.select n_way labels randomly
-            if self.mode == "train":
-                selected_cls = np.random.choice(self.cls_num, self.n_way, replace=True)
-            else:
-                selected_cls = np.random.choice(self.cls_num, max(2, self.cls_num - 1), replace=True) # take n-1 or at least 2 labels randomly
-            
-            for cls in tqdm(selected_cls):
-                try:
-                    cls_csv = self.data[cls][0]
-                    cls_df = pd.read_csv(cls_csv, index_col=None, header=0)
-
-                    # Aggregate time (generally to smooth out noisy observations)
-                    if self.time_agg != None:
-                        cls_df = cls_df.set_index(pd.DatetimeIndex(cls_df[self.timecolumn])).resample(self.time_agg).mean()
-
-                    # Gap-filling and normalize data (except for the target variable)
-                    cls_df = cls_df.fillna(method="ffill")[self.xcolumns + self.ycolumns] # forward fill
-                    cls_df = cls_df.fillna(method="bfill")[self.xcolumns + self.ycolumns] # backward fill
-                    cls_df = cls_df.dropna()
-                    cls_df.loc[:, cls_df.columns != self.ycolumns[0]] = (cls_df.loc[:, cls_df.columns != self.ycolumns[0]] - cls_df.loc[:, cls_df.columns != self.ycolumns[0]].mean()) / cls_df.loc[:, cls_df.columns != self.ycolumns[0]].std()
-
-                    # Generate series
-                    cls_df = self.generate_series(cls_df, n=self.seasonality) 
-                    
-                except:
-                    print(f"Error in processing sites: {cls_csv}")
-                    continue
-                
-                # Get x, y, and length of our timeseries
-                cls_x, cls_y = cls_df[:,:,0:-1], cls_df[:,-1:,-1]
-                cls_len = cls_df.shape[0]
-                
-                # Randomly choose the shots/support and query sets (training and testing data) from the randomly chosen labels above
-                if self.mode == "train":
-                    try:
-                        selected_timeseries_idx = np.random.choice(cls_len, self.k_shot + self.k_query, False)
-                        np.random.shuffle(selected_timeseries_idx)
-                    except:
-                        print(f"Error in processing sites: {cls_csv}")
-                        continue
-                else:
-                    #selected_timeseries_idx = np.arange(cls_len - self.k_shot - self.k_query, cls_len)
-                    selected_timeseries_idx = np.random.choice(cls_len, self.k_shot + self.k_query, False)
-                        
-                # 2. select k_shot + k_query for each class
-                Dtrain_idx = np.array(selected_timeseries_idx[:self.k_shot])  # idx for Dtrain
-                Dtest_idx = np.array(selected_timeseries_idx[self.k_shot:])  # idx for Dtest
-        
-                support_x.append(cls_x[Dtrain_idx]) # get selected timeseries for current Dtrain
-                support_y.append(cls_y[Dtrain_idx])
-                query_x.append(cls_x[Dtest_idx])
-                query_y.append(cls_y[Dtest_idx])
-            
-            # Collect batches for support set
-            self.support_x_batch.append(support_x)
-            self.support_y_batch.append(support_y)
-            
-            # Collect batches for query set
-            self.query_x_batch.append(query_x)
-            self.query_y_batch.append(query_y)
-            
-    def generate_series(self, df, n=24):
+    def _generate_series(self, df, n):
         """
         Generate time series data given the temporal window size
 
@@ -180,14 +124,14 @@ class Fluxmetanet(Dataset):
 
         Returns:
         --------
-        df <DataFrame>: collection of time series sequences of shape (batch size, sequence length, number of features)
+        series <np.array>: collection of time series sequences of shape (n_rows, seq_len, n_features)
         """
-        series_df = np.empty((len(df) - n, n, df.shape[1]))
+        series = np.empty((len(df) - n, n, df.shape[1]))
 
         for i in range(len(df) - n):
-            series_df[i] = df[i:i+n].values
+            series[i] = df[i:i+n].values
 
-        return series_df
+        return series
     
     def __getitem__(self, index):
         """
@@ -198,84 +142,9 @@ class Fluxmetanet(Dataset):
         index: index of sets, 0 <= index <= batchsz-1,
         shuffles the sequence of observations for every sampling (shuffle in dataloader object instead)
         """
-        flatten_support_x = torch.Tensor()
-        flatten_support_y = torch.Tensor()
-        flatten_query_x = torch.Tensor()
-        flatten_query_y = torch.Tensor()
-        
-        # for support: shuffle along observation dimension
-        for i in range(len(self.support_x_batch)):
-            flatten_support_x = torch.cat((flatten_support_x, torch.tensor(self.support_x_batch[i])))
-            flatten_support_y = torch.cat((flatten_support_y, torch.tensor(self.support_y_batch[i])))
-            
-        # for query: shuffle along observation dimension
-        for i in range(len(self.query_x_batch)):
-            flatten_query_x = torch.cat((flatten_query_x, torch.tensor(self.query_x_batch[i])))
-            flatten_query_y = torch.cat((flatten_query_y, torch.tensor(self.query_y_batch[i])))
-        
-        return flatten_support_x, flatten_support_y, flatten_query_x, flatten_query_y
+
+        x, y = self.data[:,:,:-1], self.data[:,:,-1]
+        return torch.tensor(x[index]), torch.tensor(y[index])
         
     def __len__(self):
-        return self.batchsz
-
-
-def generate_base_metadata(root, mode, batchsz, n_way, k_shot, k_query, x_columns, y_column, time_column=None, time_agg=None, seasonality=None):
-    if time_column != None:
-        columns = [time_column] + x_columns + [y_column]
-    else:
-        columns = x_columns + [y_column]
-    
-    csv_files = glob.glob(os.path.join(root, mode) + "/*.csv")
-    
-    if mode == "train":
-        samplesz = k_shot
-        selected_cls = np.random.choice(len(csv_files), n_way, True)
-    else:
-        samplesz = k_query
-        selected_cls = np.random.choice(len(csv_files), max(2, len(csv_files) - 1), replace=True) # take n-1 or at least 2 labels randomly
-
-    data_li = torch.Tensor()
-
-    for cls in tqdm(selected_cls):
-        try:
-            cls_csv = csv_files[cls]
-            df = pd.read_csv(cls_csv, index_col=None, header=0)
-            if time_agg != None:
-                df = df.set_index(pd.DatetimeIndex(df[time_column])).resample(time_agg).mean()
-            if time_column != None:
-                df = df.fillna(method="ffill")[columns[1:]]
-                df = df.fillna(method="bfill")[columns[1:]]
-            else:
-                df = df.fillna(method="ffill")[columns[:]]
-                df = df.fillna(method="bfill")[columns[:]]
-            df = df.dropna()
-            df.loc[:, df.columns != y_column] = (df.loc[:, df.columns != y_column] - df.loc[:, df.columns != y_column].mean()) / df.loc[:, df.columns != y_column].std() # normalize
-            #df = (df - df.mean()) / df.std()
-            
-            # generate series
-            if seasonality != None:
-                n = seasonality
-            else:
-                n = 1
-                
-            series_df = np.empty((len(df) - n, n, df.shape[1]))
-            for i in range(len(df) - n):
-                series_df[i] = df[i:i+n].values
-                
-            cls_len = series_df.shape[0]
-            
-            if mode == "train":
-                selected_timeseries_idx = np.random.choice(cls_len, samplesz * 2, False)
-                np.random.shuffle(selected_timeseries_idx)
-            else:
-                selected_timeseries_idx = np.arange(cls_len - samplesz * 2, cls_len)
-
-            data_df = torch.tensor(series_df[selected_timeseries_idx])
-            data_li = torch.cat((data_df,data_li))
-        
-        except:
-            print(f"Error processing: {cls}")
-    
-    data_x, data_y = data_li[:,:,0:-1], data_li[:,-1:,-1]
-    
-    return data_x, data_y
+        return self.data.shape[0]

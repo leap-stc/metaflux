@@ -1,129 +1,208 @@
+"""Legacy code: abstracted under Learner class as train() functionalities
 """
-Sample script to compar meta-learning. Feel free to build and define your own process
 
-Sample usage: 
-    python train.py -i "./data/tropics", -t "GPP_NT_VUT_REF" -m "bilstm"
-"""
+import metaflux
+import learn2learn as l2l
+import torch
+from torch import nn
 from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+import numpy as np
+import copy
 
-from configs import *
-from dataloader import *
-from learner import *
-from metalearner import *
+model_type= "mlp"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+loss = nn.MSELoss(reduction="mean")
 
-import argparse
+def train_meta(runs, hyper_args, fluxnet_train, fluxnet_test, with_context=True, for_inference=False, verbose=False):
+    def _get_pred(x, learner, with_context):
+        # latent = learner(x[:,:,:hyper_args["input_size"]])
+        "Subroutine to perform prediction on input x"
+        if with_context:
+            encoding = encoder(x[:,:,hyper_args["input_size"]:])
+            learner.module.update_encoding(encoding)
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-i", "--input", help = "Root directory of your inputs", required=True)
-parser.add_argument("-t", "--target", default="GPP_NT_VUT_REF", help = "Target variable")
-parser.add_argument("-m", "--model", default="mlp", help = "Models to use, currently only supports mlp, lstm, and bilstm")
-cli_args = parser.parse_args()
+        return learner(x[:,:,:hyper_args["input_size"]])
 
+    def _grad_step(with_context):
+        for n, p in maml.named_parameters():
+            p.grad.data.mul_(1.0/(step + 1))
+        
+        opt.step()
+        schedule.step()
+        
+        if with_context:
+            for n, p in encoder.named_parameters():
+                p.grad.data.mul_(1.0/(step + 1))
+            encoder_opt.step()
+            encoder_schedule.step()
+        
+        return None
 
-hyper_args = get_hyperparams(config_path="configs/hyperparams.yaml")
-model_config = get_config(model=cli_args.model, args=hyper_args)
+    meta_loss_metric = dict()
+    encoder_input_size = next(iter(fluxnet_train))[0].shape[-1] - hyper_args["input_size"]
 
-runs = 1
+    for run in range(0,runs):
+        model = metaflux.learner.Learner(
+            input_size=hyper_args["input_size"], 
+            hidden_size=hyper_args["hidden_size"], 
+            model_type=model_type,
+            encoder_hidden_size=hyper_args["encoder_hidden_size"],
+            with_context=with_context
+        ).to(device)
+        maml = l2l.algorithms.MAML(model, lr=hyper_args["update_lr"], first_order=False)
+        opt = torch.optim.Adam(maml.parameters(), lr=hyper_args["meta_lr"])
 
-"""
-Training baseline models
-"""
-print(f"Training meta-learning models")
-vals_meta_losses = []
-for run in range(0,runs):
-    print(f"Run: {run + 1}")
-    vals_meta_loss = []
+        if with_context:
+            encoder = metaflux.encoder.Encoder(
+                input_size = encoder_input_size,
+                hidden_size = hyper_args["encoder_hidden_size"]
+            ).double().to(device)
+            
+            encoder_opt = torch.optim.Adam(encoder.parameters(), lr=hyper_args["update_lr"])
+            encoder_schedule = torch.optim.lr_scheduler.CosineAnnealingLR(encoder_opt, T_max=hyper_args["epoch"])
+        else:
+            encoder = None
 
-    maml = Meta(hyper_args, model_config).to(device)
-    print(f"Model specifications: {maml}")
-    
-    fluxnet_train = Fluxmetanet(root=cli_args.input, mode="train", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column=cli_args.target, time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
-    fluxnet_test = Fluxmetanet(root=cli_args.input, mode="test", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column=cli_args.target, time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
-
-    for epoch in range(hyper_args["epoch"]):
-        # fetch meta_batchsz num of episode each time
-        db = DataLoader(fluxnet_train, hyper_args["task_num"], shuffle=True, num_workers=0)
-
-        for step, (x_spt, y_spt, x_qry, y_qry) in enumerate(db):
-            x_spt, y_spt, x_qry, y_qry = x_spt.to(device), y_spt.to(device), x_qry.to(device), y_qry.to(device)
-            loss = maml(x_spt, y_spt, x_qry, y_qry)
-
-            print('Epoch:', epoch, '\tTraining loss:', loss)
-
-            if epoch % 2 == 0:  # evaluation
-                db_test = DataLoader(fluxnet_test, 1, shuffle=True, num_workers=0)
-
-                for x_spt, y_spt, x_qry, y_qry in db_test:
-                    x_spt, y_spt, x_qry, y_qry = x_spt.squeeze(0).to(device), y_spt.squeeze(0).to(device), x_qry.squeeze(0).to(device), y_qry.squeeze(0).to(device)
-
-                    loss = round(maml.finetuning(x_spt, y_spt, x_qry, y_qry), 6)
-                    if epoch > 0 and loss > vals_meta_loss[-1]:
-                        maml.update_lr = maml.update_lr * 0.1
-                        
-                    vals_meta_loss.append(loss)
-
-                print('\tValidation loss:', loss)
+        schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=hyper_args["epoch"])
+        train_epoch, val_epoch = list(), list()
+        
+        for epoch in range(hyper_args["epoch"]):
+            opt.zero_grad()
+            if with_context:
+                encoder_opt.zero_grad()
                 
-    
-    vals_meta_losses.append(vals_meta_loss)
+            train_error, val_error = 0.0, 0.0
 
-"""
-Training baseline models
-"""
-print("Training baseline models")
-vals_base_losses = []
-for run in range(0,runs):
-    basemeta = BaseMeta(hyper_args["input_size"], hyper_args["hidden_size"], arch=cli_args.model).to(device)
-    train_x, train_y = generate_base_metadata(root=cli_args.input, mode="test", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column=cli_args.target, time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
-    test_x, test_y = generate_base_metadata(root=cli_args.input, mode="test", batchsz=1, n_way=hyper_args["n_way"], k_shot=hyper_args["k_spt"], k_query=hyper_args["k_qry"], x_columns=hyper_args["xcolumns"], y_column=cli_args.target, time_column="TIMESTAMP_START", time_agg="1H", seasonality=7)
-    
-    optimizer = torch.optim.Adam(basemeta.parameters(), lr=hyper_args["update_lr"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=0)
-    criterion = torch.nn.MSELoss().to(device)
-    vals_base_loss = []
+            # Meta-training
+            with torch.backends.cudnn.flags(enabled=False):
+                learner = maml.clone().double()
+                db_train = DataLoader(fluxnet_train, batch_size=hyper_args["batch_size"], shuffle=True)
+                max_steps = min(hyper_args["max_meta_step"], len(db_train))
 
-    for epoch in range(hyper_args["epoch"]):
-        basemeta = basemeta.train()
-        train_losses = []
+                for step, (x, y) in enumerate(db_train):
+                    x, y = x.to(device), y.to(device)
+                    support_x, query_x, support_y, query_y = train_test_split(x, y, test_size=0.2, random_state=42)
+                    pred = _get_pred(support_x, learner, with_context)
+                    error = loss(pred, support_y)
+                    learner.adapt(error)
 
-        for i, x in enumerate(train_x):
-            pred = basemeta(x.unsqueeze(0).float().to(device))
-            loss = criterion(pred.squeeze()[-1], train_y[i].float().to(device))
-            loss.backward()
-            optimizer.step()
-            train_losses.append(loss.item())
+                    # Evaluation
+                    pred = _get_pred(query_x, learner, with_context)
+                    error = loss(pred, query_y)
+                    error.backward(retain_graph=True)
+                    train_error += error.item()
 
-        train_loss = np.array(train_losses)
-        train_loss = np.mean(abs(train_loss - train_loss.mean()) / train_loss.std())
-        print('Epoch:', epoch, '\tTraining loss:', train_loss)
+                    if (step + 1) == max_steps:
+                        break
+                
+                _grad_step(with_context)
 
-        if epoch % 2 == 0:
-            basemeta = basemeta.eval()
-            val_losses = []
+                # Meta-testing
+                learner = maml.clone(first_order=True).double()
+                db_test = DataLoader(fluxnet_test, batch_size=hyper_args["batch_size"], shuffle=True)
+                max_steps = min(hyper_args["max_meta_step"], len(db_test))
+                
+                for step, (x, y) in enumerate(db_test):
+                    x, y = x.to(device), y.to(device)
+                    support_x, query_x, support_y, query_y = train_test_split(x, y, test_size=hyper_args["finetune_size"], random_state=42)
+                    
+                    # Finetuning
+                    pred = _get_pred(support_x, learner, with_context)
+                    error = loss(pred, support_y)
+                    learner.adapt(error)
 
-            with torch.no_grad():
-                for i, x in enumerate(test_x):
-                    pred = basemeta(x.unsqueeze(0).float().to(device))
-                    loss = criterion(pred.squeeze()[-1], test_y[i].float().to(device))
-                    val_losses.append(loss.item())
+                    # Evaluation
+                    pred = _get_pred(query_x, learner, with_context)
+                    error = loss(pred, query_y)
+                    val_error += error.item()
 
-            val_loss = np.array(val_losses)
-            val_loss = np.mean(abs(val_loss - val_loss.mean()) / val_loss.std())
-            scheduler.step(val_loss)
-            vals_base_loss.append(val_loss)
+                    if (step + 1) == max_steps:
+                        if (for_inference) and (epoch % int(hyper_args["epoch"] // 2)) == 0:
+                            # Take gradient steps for the class finetuned
+                            error.backward(retain_graph=True)
+                            opt.step()
+                        
+                        train_epoch.append(train_error/(step + 1))
+                        val_epoch.append(val_error/(step + 1))
+                        break
+            
+            if verbose and ((epoch % 50 == 0) or (epoch == (hyper_args["epoch"] - 1))):
+                print(f'Epoch: {epoch}, training loss: {train_epoch[epoch]}, validation loss: {val_epoch[epoch]}')
 
-            print('\tValidation loss:', val_loss)
+        meta_loss_metric.update({
+            f"train_loss_{run}": np.sqrt(np.array(train_epoch)),
+            f"val_epoch_{run}": np.sqrt(np.array(val_epoch))
+        })
 
-    vals_base_losses.append(vals_base_loss)
+    return meta_loss_metric, maml, encoder
 
-# Plot validation loss
-f, ax = plt.subplots()
-epochs = np.arange(1,hyper_args["epoch"] + 1, 2)
-ax.plot(epochs, vals_meta_losses[0], label='Meta-learning')
-ax.plot(epochs, vals_base_losses[0], label='Non Meta-learning')
-ax.set_title("GPP inference with and without meta-learning")
-ax.set_ylabel("MSE")
-ax.set_xlabel("Epoch")
-ax.legend()
-plt.show()
+def train_base(runs, hyper_args, fluxnet_train, fluxnet_test, verbose=False):
+    base_loss_metric = dict()
+
+    for run in range(0,runs):
+        model = metaflux.learner.Learner(input_size=hyper_args["input_size"], hidden_size=hyper_args["hidden_size"], model_type=model_type).double().to(device)
+        opt = torch.optim.Adam(model.parameters(), lr=hyper_args["update_lr"])
+        schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=hyper_args["epoch"])
+        train_epoch, val_epoch = list(), list()
+
+        for epoch in range(hyper_args["epoch"]):
+            train_error, val_error = 0.0, 0.0
+
+            # Training
+            db_train = DataLoader(fluxnet_train, batch_size=hyper_args["batch_size"], shuffle=True)
+            max_steps = min(hyper_args["max_meta_step"], len(db_train))
+
+            for step, (x, y) in enumerate(db_train):
+                opt.zero_grad()
+                x, y = x.to(device), y.to(device)
+                train_x, test_x, train_y, test_y = train_test_split(x, y, test_size=0.2, random_state=42)
+                pred = model(train_x[:,:,:hyper_args["input_size"]])
+                error = loss(pred, train_y)
+                error.backward()
+                opt.step()
+                train_error += loss(model(test_x[:,:,:hyper_args["input_size"]]), test_y).item()
+
+                if (step + 1) == max_steps:
+                    schedule.step()
+                    break
+            
+
+            # Testing
+            db_test = DataLoader(fluxnet_test, batch_size=hyper_args["batch_size"], shuffle=True)
+            max_steps = min(hyper_args["max_meta_step"], len(db_test))
+            model_copy = copy.deepcopy(model)
+            opt_copy = torch.optim.Adam(model_copy.parameters(), lr=hyper_args["update_lr"])
+
+            for step, (x, y) in enumerate(db_test):
+                opt_copy.zero_grad()
+                x, y = x.to(device), y.to(device)
+                train_x, test_x, train_y, test_y = train_test_split(x, y, test_size=hyper_args["finetune_size"], random_state=42)
+                pred = model_copy(train_x[:,:,:hyper_args["input_size"]])
+                error = loss(pred, train_y)
+
+                # Akin to finetuning/adaptation step in meta-learning
+                error.backward()
+                opt_copy.step()
+                train_error += error.item()
+
+                with torch.no_grad():
+                    pred = model_copy(test_x[:,:,:hyper_args["input_size"]])
+                    error = loss(pred, test_y)
+                    val_error += error.item()
+                
+                if (step + 1) == max_steps:
+                    train_epoch.append(train_error/(step + 1))
+                    val_epoch.append(val_error/(step + 1))
+                    del model_copy, opt_copy
+                    break
+
+            if verbose and ((epoch % 50 == 0) or (epoch == (hyper_args["epoch"] - 1))):
+                print(f'Epoch: {epoch}, training loss: {train_epoch[epoch]}, validation loss: {val_epoch[epoch]}')
+
+        base_loss_metric.update({
+            f"train_loss_{run}": np.sqrt(np.array(train_epoch)),
+            f"val_epoch_{run}": np.sqrt(np.array(val_epoch))
+        })
+        
+    return base_loss_metric, model
