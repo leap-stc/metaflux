@@ -1,0 +1,19 @@
+epoch: 100
+hidden_size: 512
+batch_size: 256
+input_size: 4
+meta_lr: 1.0e-04
+update_lr: 1.0e-5
+num_lstm_layers: 1
+max_meta_step: 2
+finetune_size: 0.2
+encoder_hidden_size: 256
+contextcolumns:
+- Lat
+- Lon
+- PFT
+xcolumns:
+- P_ERA
+- LAI
+- VPD_ERA
+- EVI

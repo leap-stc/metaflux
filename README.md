@@ -20,4 +20,4 @@ pip install -r requirements.txt
 ## Sample Notebooks
 1. `01a_non_temporal_pipeline`: for non-temporal dataset and model (eg. MLP)
 2. `01b_temporal_pipeline`: for temporal dataset and model (eg. LSTM, BiLSTM)
-3. `02b_training_encoder`: adding context encoder to current classic metalearning model
+3. `01c_with_encoder_pipeline`: adding context encoder to current classic metalearning model

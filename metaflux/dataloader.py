@@ -1,12 +1,12 @@
 import os
-import glob
+from glob import glob
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.compose import make_column_transformer
+from .utils import *
 
 class Fluxmetanet(Dataset):
     """
@@ -28,7 +28,8 @@ class Fluxmetanet(Dataset):
         time_agg <str>: how to aggregate time across observations, defaults to 1H (must be compatible with DateTime object)
         time_window <int>: the size of a time window 
         """
-        assert mode in ["train", "test"]
+        modes = ["train", "test"]
+        assert mode in modes
 
         self.mode = mode
         self.x_columns =  x_columns
@@ -42,8 +43,8 @@ class Fluxmetanet(Dataset):
         # Fit a one-hot encoder for PFT
         if self.context_columns != None and 'PFT' in self.context_columns:
             pft_list = list()
-            for mode in ["train", "test"]:
-                csv_files = glob.glob(os.path.join(root, mode) + "/*.csv")
+            for mode in modes:
+                csv_files = glob(os.path.join(root, mode) + "/*.csv")
                 for file in csv_files:
                     df = pd.read_csv(file, index_col=False, header=0)
                     for _, row in df.iterrows():
@@ -68,7 +69,7 @@ class Fluxmetanet(Dataset):
         --------
         timeseries <List[DataFrame]>: list of timeseries data
         """
-        csv_files = glob.glob(csvf + "/*.csv")
+        csv_files = glob(csvf + "/*.csv")
         for file in csv_files:
             df = pd.read_csv(file, index_col=False, header=0)
             df = df.loc[:,~df.columns.str.match("Unnamed")]
