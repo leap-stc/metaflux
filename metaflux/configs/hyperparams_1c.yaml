@@ -5,7 +5,7 @@ input_size: 4
 meta_lr: 1.0e-04
 update_lr: 1.0e-5
 num_lstm_layers: 1
-max_meta_step: 2
+max_meta_step: 1
 finetune_size: 0.2
 encoder_hidden_size: 256
 contextcolumns:

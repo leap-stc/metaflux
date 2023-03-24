@@ -4,7 +4,6 @@ from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 import numpy as np
 import learn2learn as l2l
-import copy
 from .model import Model
 from .encoder import Encoder
 
@@ -21,15 +20,6 @@ def shuffle(tensors):
 class Learner():
     """
     Defining the base learner. Currently supports 'linear', 'lstm', and 'bilstm' 
-
-    Params:
-    -------
-    input_size: int
-        The expected input size to the model
-    hidden_size: int
-        The expected hidden size to the model
-    model_type: str
-        The base model type, currently supports ["mlp", "lstm", "bilstm"]
     """
     def __init__(
         self, 
@@ -78,6 +68,7 @@ class Learner():
     ) -> None:
         """Main function to train metalearning algorithm"""
 
+        # Each run --> new model
         for run in range(0,runs):
             self.model = Model(
                 self.model_type,
@@ -90,8 +81,8 @@ class Learner():
             opt = torch.optim.Adam(self.maml.parameters(), lr=self.meta_lr)
             schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
-            support_dl = DataLoader(self.fluxnet_train, batch_size=self.batch_size, shuffle=True)
-            query_dl = DataLoader(self.fluxnet_test, batch_size=self.batch_size, shuffle=True)
+            support_dl = DataLoader(self.fluxnet_train, batch_size=self.batch_size)
+            query_dl = DataLoader(self.fluxnet_test, batch_size=self.batch_size)
 
             if self.with_context:
                 self.encoder = Encoder(
@@ -123,6 +114,7 @@ class Learner():
                         support_x, support_y = support_x.to(device), support_y.to(device)
                         query_x, query_y = query_x.to(device), query_y.to(device)
 
+                        # Note: Fixing the split for all epochs with fixed random_state
                         support_train_x, support_test_x, support_train_y, support_test_y = train_test_split(support_x, support_y, test_size=0.2, random_state=42)
                         query_train_x, query_test_x, query_train_y, query_test_y = train_test_split(query_x, query_y, test_size=0.2, random_state=42)
                         
@@ -136,7 +128,7 @@ class Learner():
                         error = self.loss(pred, support_test_y)
                         train_error += error.item()
                         
-                        # Update
+                        # Update (accumulate inner-loop gradients)
                         pred = self._get_pred(query_train_x, learner)
                         error = self.loss(pred, query_train_y)
                         outer_error += error
@@ -188,8 +180,8 @@ class Learner():
             opt = torch.optim.Adam(self.base_model.parameters(), lr=self.update_lr)
             schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
-            support_dl = DataLoader(self.fluxnet_train, batch_size=self.batch_size, shuffle=True)
-            query_dl = DataLoader(self.fluxnet_test, batch_size=self.batch_size, shuffle=True)
+            support_dl = DataLoader(self.fluxnet_train, batch_size=self.batch_size)
+            query_dl = DataLoader(self.fluxnet_test, batch_size=self.batch_size)
 
             train_epoch, val_epoch = list(), list()
             
@@ -204,6 +196,7 @@ class Learner():
                         support_x, support_y = support_x.to(device), support_y.to(device)
                         query_x, query_y = query_x.to(device), query_y.to(device)
 
+                        # Note: Fixing the split for all epochs with fixed random_state
                         support_train_x, support_test_x, support_train_y, support_test_y = train_test_split(support_x, support_y, test_size=0.2, random_state=42)
                         query_train_x, query_test_x, query_train_y, query_test_y = train_test_split(query_x, query_y, test_size=0.2, random_state=42)
                         

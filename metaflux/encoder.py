@@ -5,7 +5,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Encoder(nn.Module):
     """
-    Defining the Encoder
+    Defining the Encoder architecture if with_context is enabled
 
     Params:
     -------
@@ -14,6 +14,7 @@ class Encoder(nn.Module):
     hidden_size: int
         The expected hidden size to the model
     """
+
     def __init__(self, input_size, hidden_size):
         super(Encoder, self).__init__()
         self.input_size = input_size

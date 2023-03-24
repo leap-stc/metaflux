@@ -3,15 +3,22 @@ from torch import nn as nn
 
 class Model(nn.Module):
     """
-    Defining the base learner of MLP
+    Defining the base learners. Currently supports one of [mlp, lstm, bilstm]
 
     Params:
     -------
+    model_type: str
+        The base architecture of the model, one of [mlp, lstm, bilstm]
     input_size: int
         The expected input size to the model
     hidden_size: int
         The expected hidden size to the model
+    encoder_hidden_size: int
+        Size of the hidden layer for the encoder (only if with_context==True)
+    with_context: bool
+        Flag indicating the usage of context encoder
     """
+    
     def __init__(self, model_type, input_size, hidden_size, encoder_hidden_size, with_context):
         super(Model, self).__init__()
         self.model_type = model_type
