@@ -3,6 +3,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 import numpy as np
+import itertools
 import learn2learn as l2l
 from .model import Model
 from .encoder import Encoder
@@ -81,8 +82,18 @@ class Learner():
             opt = torch.optim.Adam(self.maml.parameters(), lr=self.meta_lr)
             schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
-            support_dl = DataLoader(self.fluxnet_train, batch_size=self.batch_size)
-            query_dl = DataLoader(self.fluxnet_test, batch_size=self.batch_size)
+            # processing the data
+            support_train_sz = int(len(self.fluxnet_train) * (1 - self.finetune_size))
+            query_train_sz = int(len(self.fluxnet_test) * (1 - self.finetune_size))
+
+            # split both datasets to train and test
+            support_train, support_test = torch.utils.data.random_split(self.fluxnet_train, [support_train_sz, len(self.fluxnet_train) - support_train_sz])
+            query_train, query_test = torch.utils.data.random_split(self.fluxnet_test, [query_train_sz, len(self.fluxnet_test) - query_train_sz])
+
+            support_train_dl = DataLoader(support_train, batch_size=self.batch_size, shuffle=True)
+            support_test_dl = DataLoader(support_test, batch_size=self.batch_size, shuffle=True)
+            query_train_dl = DataLoader(query_train, batch_size=self.batch_size, shuffle=True)
+            query_test_dl = DataLoader(query_test, batch_size=self.batch_size, shuffle=True)
 
             if self.with_context:
                 self.encoder = Encoder(
@@ -104,47 +115,55 @@ class Learner():
                     
                 train_error, val_error, outer_error = 0.0, 0.0, 0.0
 
+                # Get k-shot batches
+                support_train_k = self._get_k_shot(support_train_dl, self.max_meta_step)
+                support_test_k = self._get_k_shot(support_test_dl, self.max_meta_step)
+                query_train_k = self._get_k_shot(query_train_dl, self.max_meta_step)
+                query_test_k = self._get_k_shot(query_test_dl, self.max_meta_step)
+
                 # Main loop
                 with torch.backends.cudnn.flags(enabled=False):
                     learner = self.maml.clone().double()
 
-                    for task, (support, query) in enumerate(zip(support_dl, query_dl)):
-                        support_x, support_y = support
-                        query_x, query_y = query
-                        support_x, support_y = support_x.to(device), support_y.to(device)
-                        query_x, query_y = query_x.to(device), query_y.to(device)
+                    for task, (s_train, s_test) in enumerate(zip(support_train_k, support_test_k)):
+                        s_train_x, s_train_y = s_train
+                        s_test_x, s_test_y = s_test
 
-                        # Note: Fixing the split for all epochs with fixed random_state
-                        support_train_x, support_test_x, support_train_y, support_test_y = train_test_split(support_x, support_y, test_size=0.2, random_state=42)
-                        query_train_x, query_test_x, query_train_y, query_test_y = train_test_split(query_x, query_y, test_size=0.2, random_state=42)
-                        
+                        # transfer to GPU device
+                        s_train_x, s_train_y = s_train_x.to(device), s_train_y.to(device)
+                        s_test_x, s_test_y = s_test_x.to(device), s_test_y.to(device)
+
                         # Meta-training
-                        pred = self._get_pred(support_train_x, learner)
-                        error = self.loss(pred, support_train_y)
+                        pred = self._get_pred(s_train_x, learner)
+                        error = self.loss(pred, s_train_y)
                         learner.adapt(error)
 
                         # Meta-learning evaluation (no gradient step)
-                        pred = self._get_pred(support_test_x, learner)
-                        error = self.loss(pred, support_test_y)
+                        pred = self._get_pred(s_test_x, learner)
+                        error = self.loss(pred, s_test_y)
                         train_error += error.item()
-                        
+                    
+                    train_epoch.append(train_error/(task + 1))
+
+                    for task, (q_train, q_test) in enumerate(zip(query_train_k, query_test_k)):
+                        q_train_x, q_train_y = q_train
+                        q_test_x, q_test_y = q_test
+
+                        # transfer to GPU device
+                        q_train_x, q_train_y = q_train_x.to(device), q_train_y.to(device)
+                        q_test_x, q_test_y = q_test_x.to(device), q_test_y.to(device)
+
                         # Update (accumulate inner-loop gradients)
-                        pred = self._get_pred(query_train_x, learner)
-                        error = self.loss(pred, query_train_y)
+                        pred = self._get_pred(q_train_x, learner)
+                        error = self.loss(pred, q_train_y)
                         outer_error += error
 
                         # Adaptation evaluation (no gradient step)
-                        pred = self._get_pred(query_test_x, learner)
-                        error = self.loss(pred, query_test_y)
+                        pred = self._get_pred(q_test_x, learner)
+                        error = self.loss(pred, q_test_y)
                         val_error += error.item()
 
-                        del support_x, support_y, query_x, query_y
-                        torch.cuda.empty_cache()
-
-                        if task + 1 == self.max_meta_step:
-                            train_epoch.append(train_error/(task + 1))
-                            val_epoch.append(val_error/(task + 1))
-                            break
+                    val_epoch.append(val_error/(task + 1))
 
                     # Parameter outer-loop update
                     outer_error.backward()
@@ -180,8 +199,18 @@ class Learner():
             opt = torch.optim.Adam(self.base_model.parameters(), lr=self.update_lr)
             schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
-            support_dl = DataLoader(self.fluxnet_train, batch_size=self.batch_size)
-            query_dl = DataLoader(self.fluxnet_test, batch_size=self.batch_size)
+            # processing the data
+            support_train_sz = int(len(self.fluxnet_train) * (1 - self.finetune_size))
+            query_train_sz = int(len(self.fluxnet_test) * (1 - self.finetune_size))
+
+            # split both datasets to train and test
+            support_train, support_test = torch.utils.data.random_split(self.fluxnet_train, [support_train_sz, len(self.fluxnet_train) - support_train_sz])
+            query_train, query_test = torch.utils.data.random_split(self.fluxnet_test, [query_train_sz, len(self.fluxnet_test) - query_train_sz])
+
+            support_train_dl = DataLoader(support_train, batch_size=self.batch_size, shuffle=True)
+            support_test_dl = DataLoader(support_test, batch_size=self.batch_size, shuffle=True)
+            query_train_dl = DataLoader(query_train, batch_size=self.batch_size, shuffle=True)
+            query_test_dl = DataLoader(query_test, batch_size=self.batch_size, shuffle=True)
 
             train_epoch, val_epoch = list(), list()
             
@@ -189,43 +218,54 @@ class Learner():
                 opt.zero_grad()
                 train_error, val_error = 0.0, 0.0
 
-                with torch.backends.cudnn.flags(enabled=False):
-                    for task, (support, query) in enumerate(zip(support_dl, query_dl)):
-                        support_x, support_y = support
-                        query_x, query_y = query
-                        support_x, support_y = support_x.to(device), support_y.to(device)
-                        query_x, query_y = query_x.to(device), query_y.to(device)
+                # Get k-shot batches
+                support_train_k = self._get_k_shot(support_train_dl, self.max_meta_step)
+                support_test_k = self._get_k_shot(support_test_dl, self.max_meta_step)
+                query_train_k = self._get_k_shot(query_train_dl, self.max_meta_step)
+                query_test_k = self._get_k_shot(query_test_dl, self.max_meta_step)
 
-                        # Note: Fixing the split for all epochs with fixed random_state
-                        support_train_x, support_test_x, support_train_y, support_test_y = train_test_split(support_x, support_y, test_size=0.2, random_state=42)
-                        query_train_x, query_test_x, query_train_y, query_test_y = train_test_split(query_x, query_y, test_size=0.2, random_state=42)
-                        
+                with torch.backends.cudnn.flags(enabled=False):
+                    for task, (s_train, s_test) in enumerate(zip(support_train_k, support_test_k)):
+                        s_train_x, s_train_y = s_train
+                        s_test_x, s_test_y = s_test
+
+                        # transfer to GPU device
+                        s_train_x, s_train_y = s_train_x.to(device), s_train_y.to(device)
+                        s_test_x, s_test_y = s_test_x.to(device), s_test_y.to(device)
+
                         # Baseline learning + evaluation
-                        pred = self.base_model(support_train_x[:,:,:self.input_size])
-                        error = self.loss(pred, support_train_y)
+                        pred = self.base_model(s_train_x[:,:,:self.input_size])
+                        error = self.loss(pred, s_train_y)
                         error.backward()
                         opt.step()
 
                         ## Note: no gradient step
-                        train_error += self.loss(self.base_model(support_test_x[:,:,:self.input_size]), 
-                                                 support_test_y).item()
+                        train_error += self.loss(self.base_model(s_test_x[:,:,:self.input_size]), 
+                                                 s_test_y).item()
+                        
+                    train_epoch.append(train_error/(task + 1))
+
+                    for task, (q_train, q_test) in enumerate(zip(query_train_k, query_test_k)):
+                        q_train_x, q_train_y = q_train
+                        q_test_x, q_test_y = q_test
+
+                        # transfer to GPU device
+                        q_train_x, q_train_y = q_train_x.to(device), q_train_y.to(device)
+                        q_test_x, q_test_y = q_test_x.to(device), q_test_y.to(device)
 
                         # Baseline adaptation + validation
-                        pred = self.base_model(query_train_x[:,:,:self.input_size])
-                        error = self.loss(pred, query_train_y)
+                        pred = self.base_model(q_train_x[:,:,:self.input_size])
+                        error = self.loss(pred, q_train_y)
                         error.backward()
                         opt.step()
 
                         ## Note: no gradient step
-                        val_error += self.loss(self.base_model(query_test_x[:,:,:self.input_size]), 
-                                               query_test_y).item()
+                        val_error += self.loss(self.base_model(q_test_x[:,:,:self.input_size]), 
+                                               q_test_y).item()
 
                         schedule.step()
 
-                        if task + 1 == self.max_meta_step:
-                            train_epoch.append(train_error/(task + 1))
-                            val_epoch.append(val_error/(task + 1))
-                            break
+                    val_epoch.append(val_error/(task + 1))
                 
                 # No outer adaptation here
                 if verbose and ((epoch % 50 == 0) or (epoch == (epochs - 1))):
@@ -271,3 +311,11 @@ class Learner():
                 p.grad.data.mul_(1.0/(task + 1))
             encoder_opt.step()
             encoder_schedule.step()
+
+    def _get_k_shot(
+            self,
+            dataloader,
+            k
+    ):
+        selected_dataloader = itertools.islice(iter(dataloader), 0, min(len(dataloader), k))
+        return selected_dataloader
