@@ -43,8 +43,8 @@ class Learner():
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.model_type = model_type
-        self.fluxnet_train = fluxnet_train
-        self.fluxnet_test = fluxnet_test
+        self.fluxnet_support = fluxnet_train
+        self.fluxnet_query = fluxnet_test
         self.update_lr = update_lr
         self.meta_lr = meta_lr
         self.batch_size = batch_size
@@ -83,12 +83,12 @@ class Learner():
             schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
             # processing the data
-            support_train_sz = int(len(self.fluxnet_train) * (1 - self.finetune_size))
-            query_train_sz = int(len(self.fluxnet_test) * (1 - self.finetune_size))
+            support_train_sz = int(len(self.fluxnet_support) * (1 - self.finetune_size))
+            query_train_sz = int(len(self.fluxnet_query) * (1 - self.finetune_size))
 
-            # split both datasets to train and test
-            support_train, support_test = torch.utils.data.random_split(self.fluxnet_train, [support_train_sz, len(self.fluxnet_train) - support_train_sz])
-            query_train, query_test = torch.utils.data.random_split(self.fluxnet_test, [query_train_sz, len(self.fluxnet_test) - query_train_sz])
+            # split both datasets to meta-train and meta-test
+            support_train, support_test = torch.utils.data.random_split(self.fluxnet_support, [support_train_sz, len(self.fluxnet_support) - support_train_sz])
+            query_train, query_test = torch.utils.data.random_split(self.fluxnet_query, [query_train_sz, len(self.fluxnet_query) - query_train_sz])
 
             support_train_dl = DataLoader(support_train, batch_size=self.batch_size, shuffle=True)
             support_test_dl = DataLoader(support_test, batch_size=self.batch_size, shuffle=True)
@@ -125,40 +125,38 @@ class Learner():
                 with torch.backends.cudnn.flags(enabled=False):
                     learner = self.maml.clone().double()
 
+                    # Propose phi using support sets
                     for task, (s_train, s_test) in enumerate(zip(support_train_k, support_test_k)):
                         s_train_x, s_train_y = s_train
                         s_test_x, s_test_y = s_test
-
-                        # transfer to GPU device
                         s_train_x, s_train_y = s_train_x.to(device), s_train_y.to(device)
                         s_test_x, s_test_y = s_test_x.to(device), s_test_y.to(device)
 
-                        # Meta-training
+                        ## Inner-loop to propose phi using meta-training dataset
                         pred = self._get_pred(s_train_x, learner)
                         error = self.loss(pred, s_train_y)
                         learner.adapt(error)
 
-                        # Meta-learning evaluation (no gradient step)
+                        # Inner-loop evaluation (no gradient step) using meta-testing dataset
                         pred = self._get_pred(s_test_x, learner)
                         error = self.loss(pred, s_test_y)
                         train_error += error.item()
                     
                     train_epoch.append(train_error/(task + 1))
 
+                    # Outer-loop using query sets
                     for task, (q_train, q_test) in enumerate(zip(query_train_k, query_test_k)):
                         q_train_x, q_train_y = q_train
                         q_test_x, q_test_y = q_test
-
-                        # transfer to GPU device
                         q_train_x, q_train_y = q_train_x.to(device), q_train_y.to(device)
                         q_test_x, q_test_y = q_test_x.to(device), q_test_y.to(device)
 
-                        # Update (accumulate inner-loop gradients)
+                        ## accumulate inner-loop gradients given proposed phi
                         pred = self._get_pred(q_train_x, learner)
                         error = self.loss(pred, q_train_y)
                         outer_error += error
 
-                        # Adaptation evaluation (no gradient step)
+                        # Adaptation evaluation (no gradient step) using meta-testing dataset
                         pred = self._get_pred(q_test_x, learner)
                         error = self.loss(pred, q_test_y)
                         val_error += error.item()
@@ -200,12 +198,12 @@ class Learner():
             schedule = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
             # processing the data
-            support_train_sz = int(len(self.fluxnet_train) * (1 - self.finetune_size))
-            query_train_sz = int(len(self.fluxnet_test) * (1 - self.finetune_size))
+            support_train_sz = int(len(self.fluxnet_support) * (1 - self.finetune_size))
+            query_train_sz = int(len(self.fluxnet_query) * (1 - self.finetune_size))
 
             # split both datasets to train and test
-            support_train, support_test = torch.utils.data.random_split(self.fluxnet_train, [support_train_sz, len(self.fluxnet_train) - support_train_sz])
-            query_train, query_test = torch.utils.data.random_split(self.fluxnet_test, [query_train_sz, len(self.fluxnet_test) - query_train_sz])
+            support_train, support_test = torch.utils.data.random_split(self.fluxnet_support, [support_train_sz, len(self.fluxnet_support) - support_train_sz])
+            query_train, query_test = torch.utils.data.random_split(self.fluxnet_query, [query_train_sz, len(self.fluxnet_query) - query_train_sz])
 
             support_train_dl = DataLoader(support_train, batch_size=self.batch_size, shuffle=True)
             support_test_dl = DataLoader(support_test, batch_size=self.batch_size, shuffle=True)
@@ -225,15 +223,13 @@ class Learner():
                 query_test_k = self._get_k_shot(query_test_dl, self.max_meta_step)
 
                 with torch.backends.cudnn.flags(enabled=False):
+                    # Baseline learning + evaluation
                     for task, (s_train, s_test) in enumerate(zip(support_train_k, support_test_k)):
                         s_train_x, s_train_y = s_train
                         s_test_x, s_test_y = s_test
-
-                        # transfer to GPU device
                         s_train_x, s_train_y = s_train_x.to(device), s_train_y.to(device)
                         s_test_x, s_test_y = s_test_x.to(device), s_test_y.to(device)
 
-                        # Baseline learning + evaluation
                         pred = self.base_model(s_train_x[:,:,:self.input_size])
                         error = self.loss(pred, s_train_y)
                         error.backward()
@@ -245,15 +241,13 @@ class Learner():
                         
                     train_epoch.append(train_error/(task + 1))
 
+                    # Baseline-equivalent to meta-adaptation + validation
                     for task, (q_train, q_test) in enumerate(zip(query_train_k, query_test_k)):
                         q_train_x, q_train_y = q_train
                         q_test_x, q_test_y = q_test
-
-                        # transfer to GPU device
                         q_train_x, q_train_y = q_train_x.to(device), q_train_y.to(device)
                         q_test_x, q_test_y = q_test_x.to(device), q_test_y.to(device)
 
-                        # Baseline adaptation + validation
                         pred = self.base_model(q_train_x[:,:,:self.input_size])
                         error = self.loss(pred, q_train_y)
                         error.backward()

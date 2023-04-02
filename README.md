@@ -16,11 +16,15 @@ git clone https://github.com/juannat7/metaflux.git
 pip install -r requirements.txt
 ```
 
-![Meta inference](https://github.com/juannat7/metaflux/blob/main/docs/gpp_infer.jpeg)
+## Sample notebooks
+These sample notebooks attempt to demonstrate the applications of meta-learning for spatiotemporal domain adaptation. In particular, we tried to infer gross primary production (GPP) from key meteorological and remote sensing data points
+by learning key features in data-abundant regions and adapt them to fluxes in data-sparse areas. We demonstrate the use of meta-learning in non-temporal, temporal, and with spatial context situations. Feel free to apply the algorithm presented in the notebook for your specific use cases: 
 
-![Meta inference with context encoder](https://github.com/juannat7/metaflux/blob/main/docs/gpp_encoder_infer.jpeg)
-
-## Sample Notebooks
 1. `01a_non_temporal_pipeline`: for non-temporal dataset and model (eg. MLP)
 2. `01b_temporal_pipeline`: for temporal dataset and model (eg. LSTM, BiLSTM)
+
+![Meta inference](https://github.com/juannat7/metaflux/blob/main/docs/gpp_infer.jpeg)
+
 3. (experimental) `01c_with_encoder_pipeline`: adding context encoder to current classic metalearning model
+
+![Meta inference with context encoder](https://github.com/juannat7/metaflux/blob/main/docs/gpp_encoder_infer.jpeg)
