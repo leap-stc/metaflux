@@ -26,5 +26,6 @@ by learning key features in data-abundant regions and adapt them to fluxes in da
 ![Meta inference](https://github.com/juannat7/metaflux/blob/main/docs/gpp_infer.jpeg)
 
 3. (experimental) `01c_with_encoder_pipeline`: adding context encoder to current classic metalearning model
+
 ![Encoder workflow](https://github.com/juannat7/metaflux/blob/main/docs/encoder_workflow.png)
 ![Meta inference with context encoder](https://github.com/juannat7/metaflux/blob/main/docs/gpp_encoder_infer.jpeg)

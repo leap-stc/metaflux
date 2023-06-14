@@ -224,20 +224,20 @@ class Learner():
 
                 with torch.backends.cudnn.flags(enabled=False):
                     # Baseline learning + evaluation
-                    for task, (s_train, s_test) in enumerate(zip(base_train_k, base_test_k)):
-                        s_train_x, s_train_y = s_train
-                        s_test_x, s_test_y = s_test
-                        s_train_x, s_train_y = s_train_x.to(device), s_train_y.to(device)
-                        s_test_x, s_test_y = s_test_x.to(device), s_test_y.to(device)
+                    for task, (b_train, b_test) in enumerate(zip(base_train_k, base_test_k)):
+                        b_train_x, b_train_y = b_train
+                        b_test_x, b_test_y = b_test
+                        b_train_x, b_train_y = b_train_x.to(device), b_train_y.to(device)
+                        b_test_x, b_test_y = b_test_x.to(device), b_test_y.to(device)
 
-                        pred = self.base_model(s_train_x[:,:,:self.input_size])
-                        error = self.loss(pred, s_train_y)
+                        pred = self.base_model(b_train_x[:,:,:self.input_size])
+                        error = self.loss(pred, b_train_y)
                         error.backward()
                         opt.step()
 
                         ## Note: no gradient step
-                        train_error += self.loss(self.base_model(s_test_x[:,:,:self.input_size]), 
-                                                 s_test_y).item()
+                        train_error += self.loss(self.base_model(b_test_x[:,:,:self.input_size]), 
+                                                 b_test_y).item()
                         
                     train_epoch.append(train_error/(task + 1))
 
@@ -293,7 +293,8 @@ class Learner():
         encoder_schedule
     ) -> None:
         "Subroutine to perform gradient step"
-
+        
+        # normalize loss with the number of task
         for _, p in self.maml.named_parameters():
             p.grad.data.mul_(1.0/(task + 1))
         
@@ -311,5 +312,6 @@ class Learner():
             dataloader,
             k
     ):
+        "Get k-shot samples from each batch"
         selected_dataloader = itertools.islice(iter(dataloader), 0, min(len(dataloader), k))
         return selected_dataloader
