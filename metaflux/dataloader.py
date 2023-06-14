@@ -20,7 +20,7 @@ class Fluxmetanet(Dataset):
         Parameters:
         -----------
         root <str>: root path of dataset (before <mode>) in CSV, in the following structure: <class>/<mode>/<filenames>.csv
-        mode <str>: train or test (ie. metatrain or metatest)
+        mode <str>: base or target tasks
         x_columns <list>: list containing the column names of input features
         y_column <str>: the name of column for target variable
         context_columns <list>:  list containing the column names of contextual features
@@ -28,7 +28,7 @@ class Fluxmetanet(Dataset):
         time_agg <str>: how to aggregate time across observations, defaults to 1H (must be compatible with DateTime object)
         time_window <int>: the size of a time window 
         """
-        modes = ["train", "test"]
+        modes = ["base", "target"]
         assert mode in modes
 
         self.mode = mode

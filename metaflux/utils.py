@@ -138,7 +138,7 @@ def robustness_check(maml_c, maml, encoder, base, fluxnet, hyper_args, factor):
 
     return meta_c_loss_dict, meta_loss_dict, base_loss_dict
 
-def extreme_analysis(maml, base, hyper_args, data_dir, factor=1., is_plot=True):
+def extreme_analysis(maml, base, hyper_args, data_dir, model_type="mlp", factor=1., is_plot=True):
     def _get_pred(learner, encoder, x):
         with_context = False if encoder == None else True
         "Subroutine to perform prediction on input x"
@@ -150,8 +150,17 @@ def extreme_analysis(maml, base, hyper_args, data_dir, factor=1., is_plot=True):
 
     def _get_extreme(x, y, y_norm, factor=factor):
         xtr_mask = y_norm > factor
-        xtr_x = x[xtr_mask.squeeze()]
-        xtr_y = y[xtr_mask.squeeze()]
+        xtr_index = [index for index, value in enumerate(xtr_mask.squeeze()) if value]
+        xtr_x = list()
+        if model_type == "mlp":
+            xtr_x = x[xtr_mask.squeeze()]
+            xtr_y = y[xtr_mask.squeeze()]
+        else:
+            for xtr_idx in xtr_index[30:]:
+                xtr_x.append(x[xtr_idx - 30 : xtr_idx, :])
+            xtr_y = y[xtr_mask.squeeze()]
+            xtr_y = xtr_y[30:]
+        
         return torch.tensor(xtr_x).to(device), torch.tensor(xtr_y).to(device)
 
     learner = maml.clone().double()
@@ -166,10 +175,13 @@ def extreme_analysis(maml, base, hyper_args, data_dir, factor=1., is_plot=True):
     for i, station in all_df.groupby("Site"):
         x, y, y_norm = station[hyper_args['xcolumns']].to_numpy(), station[hyper_args['ycolumn']].to_numpy(), station[[f"{hyper_args['ycolumn'][0]}_norm"]].to_numpy()
         x, y = _get_extreme(x, y, y_norm)
-        maml_pred = _get_pred(learner, encoder=None, x=x)
-        base_pred = base(x)
-
         try:
+            maml_pred = _get_pred(learner, encoder=None, x=x)
+            base_pred = base(x)
+            if model_type != "mlp":
+                maml_pred = maml_pred[:,-1:]
+                base_pred = base_pred[:,-1:]
+
             extreme_under_d = {
                 "climate": station["Climate"].iloc[0],
                 "lon": station["Lon"].iloc[0],
@@ -191,7 +203,7 @@ def extreme_analysis(maml, base, hyper_args, data_dir, factor=1., is_plot=True):
                 "maml_over_mean": abs(maml_pred[maml_pred > y] - y[maml_pred > y]).mean().item(),
             }
 
-        except:
+        except Exception as e:
             continue
         
         extreme_under_df.append(extreme_under_d)
