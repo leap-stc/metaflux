@@ -33,3 +33,9 @@ by learning key features in data-abundant regions and adapt them to fluxes in da
 
 ![Encoder workflow](https://github.com/juannat7/metaflux/blob/main/docs/encoder_workflow.png)
 ![Meta inference with context encoder](https://github.com/juannat7/metaflux/blob/main/docs/gpp_encoder_infer.jpeg)
+
+## Custom Docker Image
+We publish a Docker Image with every release of the package. The images are hosted on [quay.io](https://quay.io/repository/leap-stc/metaflux) You can find the image tags on [here](https://quay.io/repository/leap-stc/metaflux?tab=tags). 
+
+### Use custom image on LEAP-Pangeo Hub
+To use this image on the [LEAP-Pangeo Jupyterhub](https://leap-stc.github.io/leap-pangeo/jupyterhub.html) you can provide a [custom image url](https://leap-stc.github.io/leap-pangeo/jupyterhub.html#custom-images) as `quay.io/leap-stc/metaflux:ec4071f9797a`
