@@ -1,0 +1,46 @@
+name: Build and push container image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+
+    # For biggish images, github actions runs out of disk space.
+    # So we cleanup some unwanted things in the disk image, and reclaim that space for our docker use
+    # https://github.com/actions/virtual-environments/issues/2606#issuecomment-772683150
+    # and https://github.com/easimon/maximize-build-space/blob/b4d02c14493a9653fe7af06cc89ca5298071c66e/action.yml#L104
+    # This gives us a total of about 52G of free space, which should be enough for now
+    - name: cleanup disk space
+      run: |
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+        df -h
+
+    - name: Checkout files in repo
+      uses: actions/checkout@main
+
+    - name: Build and push the image to quay.io
+      uses: jupyterhub/repo2docker-action@master
+      with:
+        # Make sure username & password/token pair matches your registry credentials
+        DOCKER_USERNAME: ${{ secrets.QUAY_USERNAME }}
+        DOCKER_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+        DOCKER_REGISTRY: "quay.io"
+        # Disable pushing a 'latest' tag, as this often just causes confusion
+        LATEST_TAG_OFF: true
+        # Put repo contents in /srv/repo, rather than the default (/home/jovyan). The home directory
+        # is mounted over by persistent storage when we are using the built image in a JupyterHub, and
+        # so all contents put in /home/jovyan are lost. This particularly prevents any 'start' script from
+        # working, as it is needed in runtime.
+        REPO_DIR: /srv/repo
+        #
+        # Uncomment and modify the following line with your image name, otherwise no push will happen
+        IMAGE_NAME: "leap-stc/metaflux"
+
+    # Lets us monitor disks getting full as images get bigger over time
+    - name: Show how much disk space is left
+      run: df -h
