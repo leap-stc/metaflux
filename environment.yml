@@ -13,7 +13,7 @@ dependencies:
   - PyYAML==6.0
   - tqdm==4.54.1
   - seaborn
-  - zarr
+  - zarr #added for ocean carbon analysis
   - pip
   - pip:
     - pandas==1.5.0
@@ -22,3 +22,5 @@ dependencies:
     - scikit_learn==1.1.3
     - xarray==2022.10.0
     - learn2learn==0.1.7
+    - fsspec #added for ocean carbon analysis
+    - gcsfs  #added for ocean carbon analysis
