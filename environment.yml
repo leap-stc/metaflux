@@ -23,3 +23,4 @@ dependencies:
     - xarray==2022.10.0
     - learn2learn==0.1.7
     - fsspec #added for ocean carbon analysis
+    - gcsfs  #added for ocean carbon analysis
